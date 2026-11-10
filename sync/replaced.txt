@@ -1,0 +1,5 @@
+# Upstream files this repository does not take: each is replaced by work of
+# its own (named after it). sync/sync.sh keeps upstream's version under
+# sync/upstream/<path> and, when it changes, shows the difference -- carry it
+# into the replacement by hand. One path a line; text after the path is a note.
+test/run.sh               bin/test (mix test)

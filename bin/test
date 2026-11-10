@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# bin/test -- Xipe Totec's tests, without Nix (upstream: test/run.sh).
+#
+# test/ runs as one `mix test`. test/isolated/ holds tests that define a
+# stand-in for one of xipe_totec's own modules (sync/sync.sh moves them
+# there); each runs in a `mix test` of its own. test/live/ (real REPLs) runs
+# only with --live.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# as upstream's run.sh: a tezcatl /lsp relay on this machine must not change what the suite sees
+export XIPE_TOTEC_LSP=off
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
+
+live=""
+if [ "${1:-}" = --live ]; then live=1; shift; fi
+
+status=0
+echo "=== test ==="
+mix test "$@" || status=1
+shopt -s nullglob
+for f in test/isolated/*_test.exs; do
+  echo "=== $f ==="
+  XIPE_TEST_PATH=test/isolated mix test "$f" "$@" || status=1
+done
+if [ -n "$live" ]; then
+  echo "=== test/live ==="
+  XIPE_TEST_PATH=test/live mix test "$@" || status=1
+fi
+exit "$status"

@@ -1,0 +1,4 @@
+# --- xipe_totec_without_nix's own (sync/gitignore.extra) ---
+/_build/
+/deps/
+*.ez

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# bin/xipe -- the xipe CLI without Nix (upstream: `elixir main.exs <args>` in
+# its dev shell). This repository's own.
+#
+#   bin/xipe <args>      e.g. bin/xipe help, bin/xipe start --port 4200 ...
+#
+# Runs XipeTotec.CLI.main/1 from this repository's build (_build/dev, made by
+# `mix compile` when missing or older than lib/), with the dependencies on
+# ERL_LIBS as the dev shell had them. Like upstream, it does not cd: a relative
+# <path> argument stays relative to your own directory; xipe_totec's own files
+# (info.json, tables/ ...) are found from where it is.
+set -euo pipefail
+dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+ebin="$dir/_build/dev/lib/xipe_totec/ebin"
+if [ ! -d "$ebin" ] || [ -n "$(find "$dir/lib" "$dir/app" -name '*.ex' -newer "$ebin" -print -quit)" ]; then
+  ( cd "$dir" && MIX_ENV=dev mix compile >&2 )
+fi
+export ERL_LIBS="$dir/_build/dev/lib"
+export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
+exec elixir -e '{:ok, _} = Application.ensure_all_started(:xipe_totec); XipeTotec.CLI.main(System.argv())' -- "$@"
