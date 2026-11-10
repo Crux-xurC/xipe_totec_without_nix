@@ -11,9 +11,9 @@
 # (info.json, tables/ ...) are found from where it is.
 set -euo pipefail
 dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-ebin="$dir/_build/dev/lib/xipe_totec/ebin"
-if [ ! -d "$ebin" ] || [ -n "$(find "$dir/lib" "$dir/app" -name '*.ex' -newer "$ebin" -print -quit)" ]; then
-  ( cd "$dir" && MIX_ENV=dev mix compile >&2 )
+stamp="$dir/_build/dev/.bin-xipe-compiled"   # when bin/xipe last compiled
+if [ ! -f "$stamp" ] || [ -n "$(find "$dir/lib" "$dir/app" "$dir/mix.exs" "$dir/mix.lock" -newer "$stamp" -print -quit)" ]; then
+  ( cd "$dir" && MIX_ENV=dev mix compile >&2 ) && touch "$stamp"
 fi
 export ERL_LIBS="$dir/_build/dev/lib"
 export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
