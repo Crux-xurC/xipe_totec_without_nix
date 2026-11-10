@@ -11,6 +11,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export XIPE_TOTEC_LSP=off
 export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
 
+# test_load_filters (mix.exs), which keeps test/live/ and test/isolated/ out of
+# the plain run, is new in Elixir 1.19; 1.18 would run them all together
+if ! elixir -e 'System.halt(if Version.match?(System.version(), ">= 1.19.0"), do: 0, else: 1)'; then
+  echo "bin/test: needs Elixir 1.19 or later (this is $(elixir --short-version))" >&2
+  exit 2
+fi
+
 live=""
 if [ "${1:-}" = --live ]; then live=1; shift; fi
 

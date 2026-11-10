@@ -23,7 +23,8 @@ Where xipe_totec's documents say `nix develop` or `xipe`, read them with this ta
 ## Requirements
 
 - Linux (x86_64; others untried)
-- Elixir 1.18 or later with Erlang/OTP 27 or later (checked with Elixir 1.20.0 / OTP 29)
+- Elixir 1.18 or later with Erlang/OTP 27 or later (checked with Elixir 1.18.4 / OTP 27 and 1.20.0 / OTP 29); `bin/test` needs
+  Elixir 1.19 or later (it leaves the real-REPL tests out with `test_load_filters`, new in 1.19)
 - gcc, g++, make and libcap, to build erlexec (the REPLs)
 - For OCaml and Haskell projects: `ocaml` / `ghci` in the target's environment, and
   [embody](https://github.com/Crux-xurC/embody) cloned next to this repository (or `XIPE_TOTEC_EMBODY_DIR` pointing at it)
