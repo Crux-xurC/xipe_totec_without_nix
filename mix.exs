@@ -16,6 +16,9 @@ defmodule XipeTotecWithoutNix.MixProject do
       # .exs and are loaded at run time, as upstream does
       elixirc_paths: ["lib", "app"],
       test_paths: [System.get_env("XIPE_TEST_PATH", "test")],
+      # tests define protocol implementations of their own (@derive Inspect),
+      # which consolidated protocols would not see
+      consolidate_protocols: Mix.env() != :test,
       # test/live/ needs real REPLs and test/isolated/ runs one file at a time
       # (bin/test); neither is part of a plain `mix test`
       test_load_filters: [&load_test?/1],

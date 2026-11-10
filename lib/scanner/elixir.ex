@@ -1,0 +1,359 @@
+
+defmodule XipeTotec.Scanner.Elixir.Tracer do
+  @moduledoc """
+  Compiler-tracer collector used by `XipeTotec.Scanner`. Handed to
+  `Code.put_compiler_option(:tracers, [__MODULE__])`; events are stashed in
+  the calling process's dictionary (tracer callbacks run synchronously, in
+  the same process that calls `Code.compile_quoted/2`) rather than in module
+  state, since tracers are configured as bare module names with no way to
+  pass a reference through.
+  """
+
+  @key {__MODULE__, :events}
+
+  def with_capture(fun) do
+    Process.put(@key, [])
+    Code.put_compiler_option(:tracers, [__MODULE__])
+
+    try do
+      fun.()
+      Enum.reverse(Process.get(@key, []))
+    after
+      Code.put_compiler_option(:tracers, [])
+      Process.delete(@key)
+    end
+  end
+
+  # Real user code and macro-expansion artifacts of `def`/`defmodule` are
+  # not distinguishable by `env.function` alone (some artifacts still carry
+  # the enclosing function) -- filtered by an explicit blocklist instead.
+  # Version-pinned to this project's Elixir 1.18.4 (../flake.nix); revisit
+  # this list if that pin ever moves.
+  @noise MapSet.new([
+           {:elixir_def, :store_definition, 3},
+           {:elixir_utils, :noop, 0},
+           {Module, :compile_definition_attributes, 6}
+         ])
+
+  def trace({:remote_function, meta, module, name, arity}, env) do
+    record(env, {module, name, arity}, meta)
+  end
+
+  def trace({:local_function, meta, name, arity}, env) do
+    record(env, {env.module, name, arity}, meta)
+  end
+
+  def trace(_event, _env), do: :ok
+
+  defp record(env, {module, name, arity}, meta) do
+    if {module, name, arity} not in @noise and env.function do
+      {caller_name, caller_arity} = env.function
+
+      event = %{
+        caller: {module_name(env.module), to_string(caller_name), caller_arity},
+        callee: {module_name(module), to_string(name), arity},
+        line: meta[:line]
+      }
+
+      Process.put(@key, [event | Process.get(@key, [])])
+    end
+
+    :ok
+  end
+
+  # `extract_defs/1` (in XipeTotec.Scanner) builds module names by joining
+  # the raw `__aliases__` identifier atoms (e.g. `XipeScanFixture`), never
+  # the resolved BEAM module atom (`:"Elixir.XipeScanFixture"`) that a
+  # tracer callback's `env.module`/callee module actually is -- both sides
+  # must be normalized to the same plain dotted string or they can never
+  # compare equal. A callee that is a raw Erlang module (`:crypto`, no
+  # "Elixir." prefix) is left as its own atom's string form, which will
+  # simply never match a project node (correct: it isn't one).
+  defp module_name(mod) when is_atom(mod) do
+    case Atom.to_string(mod) do
+      "Elixir." <> rest -> rest
+      other -> other
+    end
+  end
+end
+
+defmodule XipeTotec.Scanner.Elixir do
+  @moduledoc """
+  Elixir's own scan: given one Elixir source file's text, extract its
+  `node` rows (module/function/arity/span/body_hash) via
+  `Code.string_to_quoted!/2`, and its outgoing `link` rows via the compiler
+  tracer. The `defmodule` forms are compiled with `Code.compile_quoted/2`
+  in this process; the file's other top-level code is never executed.
+
+  A caller-side node whose callee does not resolve to a *known project
+  node* (e.g. `Enum.map`, anything outside the scanned sheets) produces no
+  link row -- only project-internal edges are recorded.
+  """
+
+  @behaviour XipeTotec.Scanner
+
+  alias XipeTotec.Book
+  alias XipeTotec.Scanner.Elixir.Tracer
+
+  @doc """
+  Convenience wrapper for a single, self-contained file (its own calls only
+  reference its own definitions): `scan_defs/3` then `scan_links/4` in one
+  step. A multi-file project must instead run `scan_defs/3` over *every*
+  file first, and only then `scan_links/4` over every file, so that
+  cross-file callees are already registered by the time links are resolved
+  (single-pass-per-file cannot handle a call to a not-yet-scanned file).
+  """
+  @spec scan(Book.t(), String.t(), String.t()) :: {Book.t(), %{tuple() => String.t()}}
+  def scan(book, sheet_id, source) do
+    quoted = Code.string_to_quoted!(source, columns: true)
+    {book, node_ids} = scan_defs(book, sheet_id, quoted)
+    {scan_links(book, node_ids, quoted), node_ids}
+  end
+
+  @doc """
+  Pass 1: register this sheet's `node` rows (module/function/anykey/span/
+  body_hash -- `anykey` is the arity: `add/2` and `add/3` are different
+  functions), reusing existing ids on an exact (module, name, anykey) match
+  and minting a fresh id otherwise. Returns `{book,
+  node_ids}`, `node_ids` mapping `{module, name, arity} => id` for this
+  sheet's own definitions -- pass every sheet's `node_ids`, merged, into
+  `scan_links/4` once all sheets have been through this pass.
+  """
+  @spec scan_defs(Book.t(), String.t(), String.t() | Macro.t()) :: {Book.t(), %{tuple() => String.t()}}
+  @impl XipeTotec.Scanner
+  def scan_defs(book, sheet_id, %{source: source}), do: scan_defs(book, sheet_id, source)
+
+  def scan_defs(book, sheet_id, source) when is_binary(source),
+    do: scan_defs(book, sheet_id, Code.string_to_quoted!(source, columns: true))
+
+  def scan_defs(book, sheet_id, quoted) do
+    defs = for def <- extract_defs(quoted), do: %{def | anykey: def.arity} |> Map.delete(:arity)
+    XipeTotec.Scanner.put_defs(book, sheet_id, defs)
+  end
+
+  @doc """
+  Pass 2: compile `source`/`quoted` to trace its outgoing calls and record
+  `link` rows for every callee that resolves to a *known* project node
+  (via `node_ids`, the union of every sheet's own `scan_defs/3` result, or
+  an id already in `book`). A callee that resolves to neither (stdlib, a
+  dependency, anything not yet scanned) produces no link row. Stale edges
+  for this file's own nodes (ones that no longer appear) are dropped.
+  """
+  @spec scan_links(Book.t(), %{tuple() => String.t()}, String.t() | Macro.t()) :: Book.t()
+  def scan_links(book, node_ids, source), do: book |> scan_links_report(node_ids, source) |> elem(0)
+
+  @doc """
+  `scan_links/3`, plus the `defmodule` forms whose links could not be
+  extracted: `[%{module: "Mod.Name", reason: String.t()}]`.
+
+  Each `defmodule` is compiled on its own, and one that fails to compile in
+  xipe_totec's own BEAM is skipped rather than failing the whole scan --
+  real projects are full of these (`use ExUnit.Case` without ExUnit
+  running, `use` of a dependency that isn't loaded here). Its nodes are
+  still in the book (`scan_defs/3` is a pure AST walk); only its outgoing
+  links are unknown, so its existing link rows are kept as they were
+  rather than dropped as stale -- "couldn't look" is not "no calls".
+  """
+  @spec scan_links_report(Book.t(), %{tuple() => String.t()}, String.t() | Macro.t()) ::
+          {Book.t(), [%{module: String.t(), reason: String.t()}]}
+  @impl XipeTotec.Scanner
+  def scan_links_report(book, node_ids, %{source: source}), do: scan_links_report(book, node_ids, source)
+
+  def scan_links_report(book, node_ids, source) when is_binary(source),
+    do: scan_links_report(book, node_ids, Code.string_to_quoted!(source, columns: true))
+
+  def scan_links_report(book, node_ids, quoted) do
+    {edges, failures} = extract_edges(quoted)
+
+    links =
+      for %{caller: caller, callee: callee} <- edges,
+          node = XipeTotec.Scanner.node_for(book, node_ids, caller),
+          ref = XipeTotec.Scanner.node_for(book, node_ids, callee),
+          do: %{node: node, ref: ref}
+
+    # `node_ids` spans every scanned file (cross-file callees resolve
+    # through it), so the stale sweep is narrowed to this file's own
+    # modules -- sweeping them all would drop every other file's links --
+    # minus the ones that failed to compile.
+    failed_modules = MapSet.new(failures, & &1.module)
+    own_modules = quoted |> only_defmodules() |> Enum.flat_map(&module_names/1) |> MapSet.new()
+
+    own_ids =
+      for {{module, _, _}, id} <- node_ids,
+          MapSet.member?(own_modules, module) and not MapSet.member?(failed_modules, module),
+          do: id
+
+    # calls that missed only by arity (default arguments not declared yet):
+    # reported beside the failures, never counted as one (they sweep nothing)
+    misses =
+      for %{caller: {caller_module, _, _} = caller, callee: callee} <- edges,
+          XipeTotec.Scanner.node_for(book, node_ids, caller),
+          XipeTotec.Scanner.node_for(book, node_ids, callee) == nil,
+          miss = XipeTotec.Scanner.arity_miss(book, callee, caller_module),
+          uniq: true,
+          do: miss
+
+    {XipeTotec.Scanner.put_links(book, links, own_ids), failures ++ misses}
+  end
+
+  @doc """
+  The argument counts `module.name/arity` can be called with, read from
+  `source` (a pure AST walk): a head with default arguments
+  (`def scale(x, k \\\\ 2)`, with or without a body) makes `[1, 2]`. `nil`
+  when the function has none, isn't there, or the source doesn't parse.
+  Only ever *shown* -- on a refused `row/add` -- for a person to declare
+  with `arity/set`; the scanner never sets arities.
+  """
+  @spec default_arities(String.t(), String.t(), String.t(), non_neg_integer()) :: [non_neg_integer()] | nil
+  def default_arities(source, module, name, arity) do
+    with {:ok, quoted} <- Code.string_to_quoted(source) do
+      defaults =
+        for {^module, body} <- modules_in(quoted, nil),
+            {kind, _, [head | _]} <- flatten_block(body),
+            kind in [:def, :defp],
+            {fun, _, args} when is_atom(fun) and is_list(args) <- [unguarded(head)],
+            to_string(fun) == name and length(args) == arity,
+            do: Enum.count(args, &match?({:\\, _, [_, _]}, &1))
+
+      case Enum.max(defaults, fn -> 0 end) do
+        0 -> nil
+        d -> Enum.to_list((arity - d)..arity)
+      end
+    else
+      _ -> nil
+    end
+  end
+
+  # --- node extraction (pure AST walk, no compilation) ---
+
+  defp extract_defs(quoted) do
+    for {module, body} <- modules_in(quoted, nil), def <- extract_def_clauses(body, module), do: def
+  end
+
+  # `{full module name, body}` for every `defmodule` at the top of `ast` or
+  # directly inside another module's body -- a nested one named the way
+  # Elixir names it (`defmodule Inner` inside `Calc` is `Calc.Inner`, which
+  # is also what the compiler tracer and elixir-ls report). One whose name
+  # isn't a plain alias (`__MODULE__.X`, ...) is skipped.
+  defp modules_in({:defmodule, _, [{:__aliases__, _, parts}, [do: body]]}, parent) do
+    if Enum.all?(parts, &is_atom/1) do
+      module = Enum.join(List.wrap(parent) ++ Enum.map(parts, &Atom.to_string/1), ".")
+      [{module, body} | modules_in(body, module)]
+    else
+      []
+    end
+  end
+
+  defp modules_in({:__block__, _, stmts}, parent), do: Enum.flat_map(stmts, &modules_in(&1, parent))
+  defp modules_in(_ast, _parent), do: []
+
+  # Functions only (Scanner.definition/0): macros and guards are left out.
+  defp extract_def_clauses(body, module) do
+    body
+    |> flatten_block()
+    |> Enum.flat_map(fn
+      {kind, meta, [head | _]} when kind in [:def, :defp, :defdelegate] ->
+        case unguarded(head) do
+          {name, _, args} when is_atom(name) ->
+            arity = if is_list(args), do: length(args), else: 0
+
+            [
+              %{
+                module: module,
+                name: to_string(name),
+                arity: arity,
+                anykey: nil,
+                visibility: if(kind == :defp, do: "private", else: "public"),
+                span: span_of(meta),
+                body_hash: body_hash({kind, name, arity, args})
+              }
+            ]
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end)
+  end
+
+  # `def f(x) when x > 0` -- the head is under the `when`
+  defp unguarded({:when, _, [head | _]}), do: head
+  defp unguarded(head), do: head
+
+  defp flatten_block({:__block__, _, stmts}), do: stmts
+  defp flatten_block(other), do: [other]
+
+  defp span_of(meta), do: meta[:line]
+
+  # a hash of the head with positions stripped (the body is not hashed)
+  defp body_hash(term) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(strip_meta(term)))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp strip_meta({a, _meta, c}) when is_list(c) or is_nil(c), do: {a, [], strip_meta(c)}
+  defp strip_meta({a, _meta, c}), do: {a, [], strip_meta(c)}
+  defp strip_meta(list) when is_list(list), do: Enum.map(list, &strip_meta/1)
+  defp strip_meta(other), do: other
+
+  # --- link extraction (compiles the AST in-process) ---
+
+  # Fix F: compile *only* the defmodule forms, never the full file AST -- a
+  # `.exs` script's other top-level statements (Application.ensure_all_started,
+  # Supervisor.start_link, ...) must never execute just from being scanned.
+  #
+  # One `defmodule` at a time, in source order (so a module can still use a
+  # macro from one defined above it in the same file). Returns
+  # `{edges, failures}`; a failing form contributes no edges, and every
+  # module name inside it (nested ones too -- `extract_defs/1` keys those by
+  # their own alias) is reported, so all of their nodes keep their links.
+  defp extract_edges(quoted) do
+    {edges, failures} =
+      Enum.reduce(only_defmodules(quoted), {[], []}, fn form, {edges, failures} ->
+        case compile_for_edges(form) do
+          {:ok, these} -> {[these | edges], failures}
+          {:error, reason} -> {edges, Enum.reverse(Enum.map(module_names(form), &%{module: &1, reason: reason})) ++ failures}
+        end
+      end)
+
+    {edges |> Enum.reverse() |> Enum.concat(), Enum.reverse(failures)}
+  end
+
+  # `Code.with_diagnostics` both captures the real error text (the raised
+  # CompileError only says "errors have been logged") and keeps it off
+  # stderr. `catch` covers exits too -- `mix.exs`'s `use Mix.Project` exits
+  # on a GenServer call to Mix.ProjectStack, which isn't running here.
+  defp compile_for_edges(form) do
+    {result, diagnostics} =
+      Code.with_diagnostics(fn ->
+        try do
+          {:ok, Tracer.with_capture(fn -> Code.compile_quoted(form, "xipe_totec_scan.ex") end)}
+        rescue
+          e -> {:error, Exception.message(e)}
+        catch
+          kind, value -> {:error, Exception.format_banner(kind, value)}
+        end
+      end)
+
+    case {result, for(%{severity: :error, message: m} <- diagnostics, do: m)} do
+      {{:error, _}, [_ | _] = messages} -> {:error, Enum.join(messages, "; ")}
+      _ -> result
+    end
+  end
+
+  defp module_names(form), do: form |> modules_in(nil) |> Enum.map(&elem(&1, 0))
+
+  @doc """
+  Every top-level `defmodule` form in `quoted`, everything else dropped:
+  load the module definitions, never execute a script's other top-level
+  statements. `XipeTotec.Repl.SourceSanitize` uses the same filter.
+  """
+  @spec only_defmodules(Macro.t()) :: [Macro.t()]
+  def only_defmodules({:__block__, _, stmts}), do: Enum.filter(stmts, &defmodule?/1)
+  def only_defmodules(form), do: if(defmodule?(form), do: [form], else: [])
+
+  defp defmodule?({:defmodule, _, _}), do: true
+  defp defmodule?(_), do: false
+end

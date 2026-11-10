@@ -1,0 +1,116 @@
+# see test/run.sh
+System.put_env("XIPE_TOTEC_LSP", "off")
+
+
+defmodule ServeSocketTest.ToyDialogue do
+  # Same fake as serve_project_test.exs's -- Serve.Socket is a thin
+  # transport shell (moduledoc), so this only needs to prove that a
+  # dialogue held via Serve.Project actually survives round-tripping
+  # through Serve.Socket's own state between two websocket_handle/2 calls,
+  # and that the reply envelope ("from"/"dialogue") comes out right.
+  @behaviour XipeTotec.Dialogue
+
+  @impl true
+  def start(_params), do: {:hold, %{}, "continue?"}
+
+  @impl true
+  def answer(%{}, %{"choice" => "yes"}), do: {:done, "done", []}
+end
+
+defmodule ServeSocketTest do
+  use ExUnit.Case
+
+  alias XipeTotec.Serve.{Project, Socket}
+
+  # Serve.Project is a named GenServer, same
+  # one-at-a-time reasoning as serve_project_test.exs. Socket's own
+  # callbacks (websocket_handle/2 etc.) are plain functions over a state
+  # map -- no cowboy/real WS connection needed to exercise them directly.
+  setup do
+    dir = Path.join(System.tmp_dir!(), "xipe_totec_socket_test_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    store_file = Path.join(dir, "book.jsonl")
+
+    # row/add requires an existing node with a matching arity (Dispatch):
+    # seed the store before the project loads it.
+    nodes =
+      XipeTotec.Book.new()
+      |> XipeTotec.Core.put_node("n0", %{sheet: "s0", module: "M", name: "f0", anykey: 0})
+      |> XipeTotec.Core.put_node("n1", %{sheet: "s0", module: "M", name: "f1", anykey: 1})
+
+    XipeTotec.Store.persist_diff(store_file, XipeTotec.Book.new(), nodes, [:nodes])
+
+    {:ok, pid} =
+      Project.start_link(%{
+        root: dir,
+        store_file: store_file,
+        project_id: "042",
+        programs: %{"toy/negotiate" => ServeSocketTest.ToyDialogue}
+      })
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: GenServer.stop(pid)
+      File.rm_rf!(dir)
+    end)
+
+    {:ok, dir: dir, state: %{initialized: true, capabilities: %{}, dialogue: nil}}
+  end
+
+  defp request(method, params, id \\ 1), do: JSON.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+
+  # a web page can dial this socket too; only a browser sends Origin
+  # (moduledoc's "Origin")
+  test "a handshake without Origin is accepted, one from a page is not unless listed" do
+    assert Socket.check_origin(:undefined, []) == :ok
+    assert Socket.check_origin("https://evil.example", []) == {:error, "https://evil.example"}
+    assert Socket.check_origin("http://127.0.0.1:4001", []) == {:error, "http://127.0.0.1:4001"}
+    assert Socket.check_origin("http://127.0.0.1:4001", ["http://127.0.0.1:4001"]) == :ok
+  end
+
+  test "XIPE_TOTEC_ALLOWED_ORIGINS is a comma-separated list, empty by default" do
+    previous = System.get_env("XIPE_TOTEC_ALLOWED_ORIGINS")
+
+    try do
+      System.delete_env("XIPE_TOTEC_ALLOWED_ORIGINS")
+      assert Socket.allowed_origins() == []
+      System.put_env("XIPE_TOTEC_ALLOWED_ORIGINS", " http://a:1 ,,http://b:2")
+      assert Socket.allowed_origins() == ["http://a:1", "http://b:2"]
+    after
+      if previous, do: System.put_env("XIPE_TOTEC_ALLOWED_ORIGINS", previous), else: System.delete_env("XIPE_TOTEC_ALLOWED_ORIGINS")
+    end
+  end
+
+  test "init/2 upgrades a handshake that has no Origin (how tezcatl's relay dials in)" do
+    assert {:cowboy_websocket, _req, %{initialized: false}, _opts} = Socket.init(%{headers: %{}}, [])
+  end
+
+  test "initialize tells the client which project this server has open", %{dir: dir} do
+    {:reply, {:text, body}, state} =
+      Socket.websocket_handle({:text, request("initialize", %{})}, %{initialized: false, capabilities: nil, dialogue: nil})
+
+    assert state.initialized
+    assert {:ok, %{"result" => %{"project" => %{"id" => "042", "root" => ^dir}}}} = JSON.decode(body)
+  end
+
+  test "an ordinary request carries a 01-tagged dialogue envelope and dialogue stays nil", %{state: state} do
+    {:reply, {:text, body}, new_state} =
+      Socket.websocket_handle({:text, request("row/add", %{"node" => "n0", "args" => []})}, state)
+
+    assert new_state.dialogue == nil
+    assert {:ok, %{"result" => result, "dialogue" => %{"hold" => false, "via_repl" => false}, "from" => nil}} = JSON.decode(body)
+    assert is_binary(result["id"])
+  end
+
+  test "starting a registered dialogue holds it in Socket's own state across calls", %{state: state} do
+    {:reply, {:text, body1}, state} = Socket.websocket_handle({:text, request("toy/negotiate", %{})}, state)
+
+    assert {:ok, %{"dialogue" => %{"hold" => true, "text" => "continue?"}}} = JSON.decode(body1)
+    assert {ServeSocketTest.ToyDialogue, %{}} = state.dialogue
+
+    {:reply, {:text, body2}, state} =
+      Socket.websocket_handle({:text, request("dialogue/answer", %{"choice" => "yes"})}, state)
+
+    assert {:ok, %{"dialogue" => %{"hold" => false, "text" => "done"}}} = JSON.decode(body2)
+    assert state.dialogue == nil
+  end
+end

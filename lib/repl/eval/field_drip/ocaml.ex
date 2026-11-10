@@ -1,0 +1,14 @@
+
+defmodule XipeTotec.Repl.Eval.FieldDrip.Ocaml do
+  @moduledoc """
+  OCaml's `FieldDrip`: `embody.ml` writes the same
+  `repr=`/`type=`/`compare=`/`display=` body every language does, so the
+  reading is Elixir's. `type` is the toplevel's own type text
+  (`Target.shape list`), finer than Elixir's.
+  """
+
+  @behaviour XipeTotec.Repl.Eval.FieldDrip
+
+  @impl true
+  defdelegate parse(body), to: XipeTotec.Repl.Eval.FieldDrip.Elixir
+end

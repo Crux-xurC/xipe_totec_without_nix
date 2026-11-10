@@ -1,0 +1,12 @@
+# Per-machine project registry and books (absolute paths, user data) -- see lib/workspace.exs
+/tables/
+
+# Local-only, kept out of the published repository: the Japanese record up to
+# 2026-10-10 (work_history/) and the notes for agent sessions (CLAUDE.md)
+/work_history/
+/CLAUDE.md
+
+# --- xipe_totec_without_nix's own (sync/gitignore.extra) ---
+/_build/
+/deps/
+*.ez

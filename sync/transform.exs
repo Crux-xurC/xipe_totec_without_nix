@@ -15,7 +15,8 @@
 #     here, lib/xipe_totec_without_nix/plugins.ex), which this repository's
 #     application calls when it starts -- what main.exs's requires did
 #
-# Also: main.exs -> lib/cli.ex without its last line (the call of
+# A test that reads a compiled file's source by its path ("../lib/x.exs")
+# gets ".ex". # Also: main.exs -> lib/cli.ex without its last line (the call of
 # XipeTotec.CLI.main/1, which bin/xipe makes); tests without ExUnit.start
 # (test/test_helper.exs starts it). Any other require of a compiled file is an
 # error: this script must learn its form.
@@ -92,6 +93,21 @@ process = fn rel, mode ->
     end)
 
   check_left.(rel, kept)
+
+  # a test that reads a compiled file's source by its path ("../lib/x.exs")
+  # reads it as .ex
+  kept =
+    if mode == :test do
+      Enum.map(kept, fn l ->
+        Regex.replace(~r/"((?:\.\.\/)+lib\/[A-Za-z0-9_\/]+)\.exs"/, l, fn whole, p ->
+          t = rel_of.(Path.expand(p <> ".exs", Path.join(dir, Path.dirname(rel))))
+          if compiled?.(t), do: "\"#{p}.ex\"", else: whole
+        end)
+      end)
+    else
+      kept
+    end
+
   File.write!(abs, Enum.join(kept, "\n"))
 end
 

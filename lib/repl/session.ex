@@ -1,0 +1,133 @@
+defmodule XipeTotec.Repl.Session do
+  @moduledoc """
+  Generic session-lifecycle orchestration:
+  built only from `Repl.Sender`'s three primitives (`send/1`, `write/2`,
+  `kill/1`) and the per-language values `Repl.Launch` computes
+  (`ready_pattern`, `exit_input`) -- no language-specific branching lives
+  here at all. Adding a new REPL language later means writing a new
+  `Repl.Launch`-equivalent that computes different values; this module
+  doesn't change.
+  """
+
+  @ready_marker "XT_READY"
+  # how often a wait looks at `cancelled?` (await_ready/5)
+  @cancel_poll_ms 200
+  # how much of a failed boot's output await_ready/4 hands back
+  @boot_output_lines 30
+
+  @doc """
+  Blocks the calling process until the REPL `message` (`Repl.Launch`)
+  launched is ready for input, in two stages:
+
+    1. `message["ready_pattern"]` (the REPL's own banner) appears in the
+       output -- skipped when `nil`
+    2. `message["ready_probe"]` is written with `sender.write/2` and the
+       REPL prints `XT_READY` -- skipped when `nil`
+
+  Fails if the process exits first (the "XT_EXIT" marker turns up -- e.g. a
+  bad launch command or a compile error at boot) or `timeout` (for both
+  stages together) elapses. An exit carries its status and the last
+  #{@boot_output_lines} lines the REPL printed before it, which is where a compile error
+  says what and where (`output`, `""` if it printed nothing).
+
+  `cancelled?` (0-arity) is asked while waiting: once it says yes this
+  returns `{:error, :cancelled}` (`eval/cancel` during a long boot). The
+  caller ends the session.
+  """
+  @spec await_ready(module(), term(), map(), timeout(), (-> boolean())) ::
+          :ok | {:error, :timeout} | {:error, :cancelled} | {:error, {:exited_before_ready, String.t(), String.t()}}
+  def await_ready(sender, handle, message, timeout \\ 10_000, cancelled? \\ fn -> false end) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    with {:ok, rest} <- wait_for(handle, message["ready_pattern"], "", deadline, cancelled?) do
+      case message["ready_probe"] do
+        nil ->
+          :ok
+
+        probe ->
+          sender.write(handle, probe)
+
+          case wait_for(handle, @ready_marker, rest, deadline, cancelled?) do
+            {:ok, _rest} -> :ok
+            error -> error
+          end
+      end
+    end
+  end
+
+  # `{:ok, output after pattern}` once `pattern` is in the output (`nil`:
+  # right away)
+  defp wait_for(_handle, nil, buffer, _deadline, _cancelled?), do: {:ok, buffer}
+
+  defp wait_for(handle, pattern, buffer, deadline, cancelled?) do
+    cond do
+      String.contains?(buffer, pattern) ->
+        [_, rest] = String.split(buffer, pattern, parts: 2)
+        {:ok, rest}
+
+      match = Regex.run(~r/XT_EXIT (\S+)/, buffer) ->
+        [output | _] = String.split(buffer, "XT_EXIT ", parts: 2)
+        {:error, {:exited_before_ready, Enum.at(match, 1), last_lines(output)}}
+
+      true ->
+        remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+        receive do
+          {^handle, {:data, chunk}} -> wait_for(handle, pattern, buffer <> chunk, deadline, cancelled?)
+        after
+          min(remaining, @cancel_poll_ms) ->
+            cond do
+              cancelled?.() -> {:error, :cancelled}
+              remaining <= @cancel_poll_ms -> {:error, :timeout}
+              true -> wait_for(handle, pattern, buffer, deadline, cancelled?)
+            end
+        end
+    end
+  end
+
+  defp last_lines(output) do
+    output
+    |> String.split(~r/\r?\n/)
+    |> Enum.map(&String.trim_trailing/1)
+    |> Enum.drop_while(&(&1 == ""))
+    |> Enum.reverse()
+    |> Enum.drop_while(&(&1 == ""))
+    |> Enum.take(@boot_output_lines)
+    |> Enum.reverse()
+    |> Enum.join("\n")
+  end
+
+  @doc """
+  Graceful-then-forceful shutdown: writes `exit_input` via `sender.write/2`,
+  then waits up to `graceful_timeout` for the "XT_EXIT" marker. If it
+  doesn't show up (the session wasn't reading stdin, whether busy or
+  hung), escalates to `sender.kill/1` and
+  waits again with no timeout, since `kill/1` is documented to always end
+  the session eventually. Either way this always returns once exit has
+  actually been observed -- never just "gave up waiting".
+  """
+  @spec close(module(), term(), String.t(), timeout()) :: :ok
+  def close(sender, handle, exit_input, graceful_timeout \\ 5_000) do
+    sender.write(handle, exit_input)
+
+    case await_exit(handle, "", graceful_timeout) do
+      :ok ->
+        :ok
+
+      {:error, :timeout} ->
+        sender.kill(handle)
+        :ok = await_exit(handle, "", :infinity)
+        :ok
+    end
+  end
+
+  defp await_exit(handle, buffer, timeout) do
+    receive do
+      {^handle, {:data, chunk}} ->
+        buffer = buffer <> chunk
+        if String.contains?(buffer, "XT_EXIT "), do: :ok, else: await_exit(handle, buffer, timeout)
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+end

@@ -1,0 +1,168 @@
+
+defmodule XipeTotec.Serve.Socket do
+  @moduledoc """
+  The WebSocket (localhost) entry, one `:cowboy_websocket` instance per
+  accepted connection. A thin transport shell: decode/encode via
+  `Protocol`, forward real work to the single `Serve.Project` GenServer.
+  Localhost only, no authentication.
+
+  ## Origin
+
+  Localhost-only is not enough on its own: any web page open in a browser
+  on this machine can dial `ws://127.0.0.1:<port>/` (a WebSocket is not
+  held back by CORS), and a client that can `row/add` + `eval` runs
+  arbitrary code in the target project's REPL. A browser always sends an
+  `Origin` header on a WebSocket handshake; this socket's real clients
+  (tezcatl's `/xipe` relay, which dials in with `gun`, or any other local
+  program) send none. So a handshake with no `Origin` is accepted, and one
+  with an `Origin` only if it is listed in `XIPE_TOTEC_ALLOWED_ORIGINS`
+  (comma-separated, empty by default). tezcatl's pages never reach this
+  socket directly -- they go through the relay's `/xipe`, which checks
+  their Origin itself (tezcatl `AllowedOrigins`).
+
+  `initialize`'s session state (`initialized?`, the client's declared
+  capabilities) lives here, per connection, not in `Serve.Project`, which
+  holds only what every connection shares, the `Book`.
+
+  `subscribe` is answered here and is a no-op: every `notify/*` is
+  broadcast to every attached session unconditionally (`Serve.Project`).
+
+  `state.dialogue` (`InOut.dialogue()`, `nil` if none held) is the other
+  piece of connection-local state: one connection, one dialogue. Every
+  ordinary request goes through `Project.request_dialogue/5`, so an
+  unrelated method reaches `Dispatch`/`Pipeline`/`"eval"` whether or not a
+  dialogue is held (`InOut`'s pass-through case). The reply envelope's
+  `"from"`/`"dialogue"` fields carry `InOut`'s tag; `outcome.ok?` decides
+  whether `Protocol.encode_response/3` gets `{:ok, ...}` or `{:error, ...}`.
+
+  `input` is handled here too, by `Serve.Input`: one line
+  typed into tezcatl's dialogue window, answered with the text a person
+  reads in `dialogue.text`. A line of commands runs in a process of its
+  own and is answered when it ends (`state.inputs` holds its request id
+  meanwhile), so this connection keeps answering other frames -- another
+  window's, since tezcatl's windows share one connection -- while it runs.
+  """
+
+  @behaviour :cowboy_websocket
+
+  alias XipeTotec.{Protocol, Serve.Input, Serve.Project}
+
+  @impl true
+  def init(req, _opts) do
+    case check_origin(:cowboy_req.header("origin", req, :undefined)) do
+      :ok ->
+        {:cowboy_websocket, req, %{initialized: false, capabilities: nil, dialogue: nil, inputs: %{}},
+         %{idle_timeout: :infinity}}
+
+      {:error, origin} ->
+        IO.puts(:stderr, "xipe start: rejected a connection from Origin #{inspect(origin)} (XIPE_TOTEC_ALLOWED_ORIGINS)")
+        req = :cowboy_req.reply(403, %{"content-type" => "text/plain"}, "forbidden origin\n", req)
+        {:ok, req, nil}
+    end
+  end
+
+  @doc """
+  Whether a handshake's `Origin` header (`:undefined` when absent) may
+  connect -- see the moduledoc's "Origin". `allowed` defaults to
+  `XIPE_TOTEC_ALLOWED_ORIGINS`.
+  """
+  @spec check_origin(String.t() | :undefined, [String.t()]) :: :ok | {:error, String.t()}
+  def check_origin(origin, allowed \\ allowed_origins())
+  def check_origin(:undefined, _allowed), do: :ok
+  def check_origin(origin, allowed), do: if(origin in allowed, do: :ok, else: {:error, origin})
+
+  @spec allowed_origins() :: [String.t()]
+  def allowed_origins do
+    (System.get_env("XIPE_TOTEC_ALLOWED_ORIGINS") || "")
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  @impl true
+  def websocket_init(state) do
+    :ok = Project.attach(self())
+    {:ok, state}
+  end
+
+  @impl true
+  def websocket_handle({:text, frame}, state) do
+    case Protocol.decode(frame) do
+      {:ok, {:request, id, "initialize", params}} ->
+        result = %{"capabilities" => %{}, "project" => Project.info()}
+
+        {:reply, {:text, Protocol.encode_response(id, {:ok, result})},
+         %{state | initialized: true, capabilities: params}}
+
+      {:ok, {:request, id, _method, _params}} when not state.initialized ->
+        {:reply, {:text, Protocol.encode_response(id, {:error, not_initialized()})}, state}
+
+      {:ok, {:request, id, "subscribe", _params}} ->
+        {:reply, {:text, Protocol.encode_response(id, {:ok, %{}})}, state}
+
+      {:ok, {:request, id, "input", %{"text" => text}}} when is_binary(text) ->
+        case Input.start(text, state.dialogue) do
+          {:now, new_dialogue, outcome} -> {:reply, {:text, reply(id, outcome)}, %{state | dialogue: new_dialogue}}
+          {:later, ref, new_dialogue} ->
+            {:ok, %{state | dialogue: new_dialogue} |> Map.update(:inputs, %{ref => id}, &Map.put(&1, ref, id))}
+        end
+
+      {:ok, {:request, id, "input", _params}} ->
+        error = %{"code" => "invalid_params", "message" => "input needs text (string)"}
+        {:reply, {:text, Protocol.encode_response(id, {:error, error})}, state}
+
+      {:ok, {:request, id, method, params}} ->
+        {new_dialogue, outcome} = Project.request_dialogue(state.dialogue, method, params)
+        {:reply, {:text, reply(id, outcome)}, %{state | dialogue: new_dialogue}}
+
+      {:ok, {:notify, _method, _params}} ->
+        # nothing here acts on a notify from a client
+        {:ok, state}
+
+      {:ok, {:response, _id, _outcome}} ->
+        # a reply to a provider/* request: this server sends none, so
+        # nothing is pending to match it to
+        {:ok, state}
+
+      {:error, _reason} ->
+        body = Protocol.encode_response(nil, {:error, %{"code" => "parse_error", "message" => "invalid frame"}})
+        {:reply, {:text, body}, state}
+    end
+  end
+
+  def websocket_handle(_frame, state), do: {:ok, state}
+
+  @impl true
+  def websocket_info({:xipe_out, text}, state), do: {:reply, {:text, text}, state}
+
+  # a line `Serve.Input` ran off this process; `{:set, d}` when it started
+  # or ended a dialogue
+  def websocket_info({:xipe_input_done, ref, change, outcome}, state) do
+    {id, inputs} = Map.pop(Map.get(state, :inputs, %{}), ref)
+    state = if change == :keep, do: state, else: %{state | dialogue: elem(change, 1)}
+    {:reply, {:text, reply(id, outcome)}, Map.put(state, :inputs, inputs)}
+  end
+  def websocket_info(_msg, state), do: {:ok, state}
+
+  @impl true
+  def terminate(_reason, _req, _state) do
+    Project.detach(self())
+    :ok
+  end
+
+  # the response with the dialogue envelope (InOut's outcome shape)
+  defp reply(id, outcome) do
+    envelope = %{
+      "from" => nil,
+      "dialogue" => %{"hold" => outcome.hold, "via_repl" => outcome.via_repl, "text" => outcome.text}
+    }
+
+    if outcome.ok? do
+      Protocol.encode_response(id, {:ok, Protocol.wire_result(outcome.result) || %{}}, envelope)
+    else
+      Protocol.encode_response(id, {:error, outcome.error}, envelope)
+    end
+  end
+
+  defp not_initialized, do: %{"code" => "not_initialized", "message" => "send initialize first"}
+end

@@ -1,0 +1,122 @@
+
+
+defmodule WorkspaceTest do
+  use ExUnit.Case
+
+  alias XipeTotec.{Info, ProjectRegistry, Session, Workspace}
+
+  setup do
+    base = Path.join(System.tmp_dir!(), "xipe_totec_workspace_test_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(base) end)
+
+    roots = %{registry: Path.join(base, "tables/project"), info: Path.join(base, "info.json")}
+    proj_a = Path.join(base, "a")
+    proj_b = Path.join(base, "b")
+    File.mkdir_p!(proj_a)
+    File.mkdir_p!(proj_b)
+    File.write!(Path.join(proj_a, "m.exs"), "defmodule A do\n  def f(x), do: x\nend\n")
+    File.write!(Path.join(proj_b, "notes.txt"), "hi\n")
+
+    {:ok, roots: roots, proj_a: proj_a, proj_b: proj_b}
+  end
+
+  test "lookup/2 is the reverse of register/2", %{roots: roots, proj_a: a} do
+    id = ProjectRegistry.register(a, roots.registry)
+    assert {dir, ^a} = ProjectRegistry.lookup(id, roots.registry)
+    assert Path.basename(dir) == "#{id}_a"
+    assert ProjectRegistry.lookup("999", roots.registry) == nil
+  end
+
+  test "resolve/2 with nothing selected is an error pointing at `xipe choice project`", %{roots: roots} do
+    assert {:error, message} = Workspace.resolve(nil, roots)
+    assert message =~ "xipe choice project"
+  end
+
+  test "resolve/2 with an unregistered <dir> is an error, never an implicit registration", %{roots: roots, proj_a: a} do
+    assert {:error, message} = Workspace.resolve(a, roots)
+    assert message =~ "not a registered project"
+    assert ProjectRegistry.find(a, roots.registry) == nil
+  end
+
+  test "resolve/2 with no <dir>: a running session's project beats the selected one; an explicit <dir> beats both",
+       %{roots: roots, proj_a: a, proj_b: b} do
+    roots = Map.put(roots, :session, Path.join(Path.dirname(roots.info), "tables/session.json"))
+    {selected, _} = Workspace.choose(a, roots)
+    {served, _} = Workspace.choose(b, roots)
+    Workspace.choose(a, roots)
+
+    Session.write(%{"project" => served.id, "port" => 4200, "root" => b}, roots.session)
+    assert {:ok, %{id: id}} = Workspace.resolve(nil, roots)
+    assert id == served.id
+    assert {:ok, %{id: explicit}} = Workspace.resolve(a, roots)
+    assert explicit == selected.id
+
+    # the session gone (its record removed, or its process dead) -> back to the selection
+    Session.clear(roots.session)
+    assert {:ok, %{id: ^explicit}} = Workspace.resolve(nil, roots)
+  end
+
+  test "choose/2 registers a new project, saves its surface table, and selects it", %{roots: roots, proj_a: a} do
+    assert {project, :new} = Workspace.choose(a, roots)
+    assert project.id == "001"
+    assert project.path == a
+    assert Path.dirname(project.store_file) == project.dir
+    assert [%{"path" => "m.exs", "language" => "elixir"}] = XipeTotec.SurfaceTable.load(project.table_file)
+    assert Workspace.selected(roots) == "001"
+    assert {:ok, ^project} = Workspace.resolve(nil, roots)
+  end
+
+  test "choose/2 on an already-registered project keeps its id and just switches the selection", %{roots: roots, proj_a: a, proj_b: b} do
+    {pa, :new} = Workspace.choose(a, roots)
+    {pb, :new} = Workspace.choose(b, roots)
+    assert Workspace.selected(roots) == pb.id
+
+    assert {^pa, :existing} = Workspace.choose(a, roots)
+    assert Workspace.selected(roots) == pa.id
+  end
+
+  test "each project gets its own book file", %{roots: roots, proj_a: a, proj_b: b} do
+    {pa, _} = Workspace.choose(a, roots)
+    {pb, _} = Workspace.choose(b, roots)
+    assert pa.store_file != pb.store_file
+    assert {:ok, ^pa} = Workspace.resolve(a, roots)
+  end
+
+  test "generate_table/2 keeps row ids stable across regeneration and picks up new files", %{roots: roots, proj_a: a} do
+    {_project, [row]} = Workspace.generate_table(a, roots)
+    File.write!(Path.join(a, "n.exs"), "defmodule N do\nend\n")
+    {_project, rows} = Workspace.generate_table(a, roots)
+    assert Enum.find(rows, &(&1["path"] == "m.exs"))["id"] == row["id"]
+    assert Enum.any?(rows, &(&1["path"] == "n.exs"))
+  end
+
+  # the selection is machine-local (tables/, git-ignored): choosing a
+  # project leaves the tracked info.json untouched
+  test "choose/2 keeps the selection beside the registry, not in info.json", %{roots: roots, proj_a: a} do
+    Info.save(%{"languages" => ["elixir"], "repls" => []}, roots.info)
+    before = File.read!(roots.info)
+    {project, _} = Workspace.choose(a, roots)
+    assert File.read!(roots.info) == before
+    assert Workspace.selection_path(roots) == Path.join(Path.dirname(roots.registry), "selection.json")
+    assert JSON.decode!(File.read!(Workspace.selection_path(roots))) == %{"project" => project.id}
+  end
+
+  test "a project.json that is not readable: choose/2 and resolve/2 answer its message (2026-10-16)", %{roots: roots, proj_a: a, proj_b: b} do
+    {pa, :new} = Workspace.choose(a, roots)
+    File.write!(Path.join(pa.dir, "project.json"), "[")
+    assert {:error, message} = Workspace.choose(b, roots)
+    assert message =~ "project.json is not readable JSON"
+    assert {:error, ^message} = Workspace.resolve(b, roots)
+    # the selected project itself
+    assert {:error, _} = Workspace.resolve(nil, roots)
+  end
+
+  test "a surface table that is not readable is made again by generate_table/2 (2026-10-16)", %{roots: roots, proj_a: a} do
+    {project, _rows} = Workspace.generate_table(a, roots)
+    File.write!(project.table_file, "[")
+    assert {:error, message} = XipeTotec.SurfaceTable.read(project.table_file)
+    assert message =~ "xipe table generate"
+    assert {_project, [%{"path" => "m.exs"}]} = Workspace.generate_table(a, roots)
+    assert {:ok, [_]} = XipeTotec.SurfaceTable.read(project.table_file)
+  end
+end
