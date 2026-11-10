@@ -8,18 +8,19 @@
 # then Elixir need not be on PATH), else from this repository's build
 # (_build/dev, made by `mix compile` when missing or older than lib/), with
 # the dependencies on ERL_LIBS as the dev shell had them. Either way
-# XIPE_TOTEC_HOME is this directory, where xipe_totec's own files are
+# XIPE_TOTEC_HOME is this directory (unless already set), where xipe_totec's own files are
 # (info.json, tables/, the plugins in lib/repl/ ...; app/root.ex). Like
 # upstream it does not cd: a relative <path> argument stays relative to your
 # own directory.
 set -euo pipefail
 dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-export XIPE_TOTEC_HOME="$dir"
+export XIPE_TOTEC_HOME="${XIPE_TOTEC_HOME:-$dir}"   # a copy elsewhere (tezcatl's E2E) may be named
 export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-+fnu}"
 main='{:ok, _} = Application.ensure_all_started(:xipe_totec); XipeTotec.CLI.main(System.argv())'
 
 release="$dir/_build/prod/rel/xipe_totec/bin/xipe_totec"
 if [ -x "$release" ]; then
+  unset ERL_LIBS   # the release holds its own libraries
   exec "$release" eval "$main" "$@"
 fi
 
