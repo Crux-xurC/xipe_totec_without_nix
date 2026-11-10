@@ -38,8 +38,8 @@ defmodule XipeTotec.Workspace do
   @spec default_roots() :: roots()
   def default_roots,
     do: %{
-      registry: Path.expand("../tables/project", __DIR__),
-      info: Path.expand("../info.json", __DIR__),
+      registry: Path.expand("../tables/project", XipeTotecWithoutNix.Root.dir(__DIR__)),
+      info: Path.expand("../info.json", XipeTotecWithoutNix.Root.dir(__DIR__)),
       session: Session.default_path()
     }
 

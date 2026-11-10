@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/release -- build the release (Erlang's runtime included) that bin/xipe
+# runs when it is there. This repository's own. Needs Elixir, gcc/g++, make and
+# libcap (erlexec's port program) once, to build. The release does not hold the
+# plugins and settings (lib/repl/language/, info.json, tables/ ...): bin/xipe
+# points it at this directory with XIPE_TOTEC_HOME (app/root.ex).
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+export MIX_ENV=prod
+mix deps.get --only prod
+mix release --overwrite
+echo "bin/release: built _build/prod/rel/xipe_totec -- bin/xipe runs it"

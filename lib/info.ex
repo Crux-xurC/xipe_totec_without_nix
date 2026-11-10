@@ -16,10 +16,9 @@ defmodule XipeTotec.Info do
   works.
   """
 
-  @default_path Path.expand("../info.json", __DIR__)
-  @language_dir Path.expand("repl/language", __DIR__)
-  @scan_dir Path.expand("repl/eval/scan", __DIR__)
-
+  defp __xt_default_path__, do: Path.expand("../info.json", XipeTotecWithoutNix.Root.dir(__DIR__))
+  defp __xt_language_dir__, do: Path.expand("repl/language", XipeTotecWithoutNix.Root.dir(__DIR__))
+  defp __xt_scan_dir__, do: Path.expand("repl/eval/scan", XipeTotecWithoutNix.Root.dir(__DIR__))
   @type t :: %{String.t() => term()}
 
   @doc """
@@ -30,7 +29,7 @@ defmodule XipeTotec.Info do
   refresh`.
   """
   @spec load(Path.t()) :: t()
-  def load(path \\ @default_path) do
+  def load(path \\ __xt_default_path__()) do
     case read(path) do
       {:ok, info} -> info
       {:error, message} -> raise ArgumentError, message
@@ -44,7 +43,7 @@ defmodule XipeTotec.Info do
   makes it again), so `load/1` past that point reads a sound file.
   """
   @spec read(Path.t()) :: {:ok, t()} | {:error, String.t()}
-  def read(path \\ @default_path) do
+  def read(path \\ __xt_default_path__()) do
     case File.read(path) do
       {:ok, content} ->
         case JSON.decode(content) do
@@ -62,7 +61,7 @@ defmodule XipeTotec.Info do
 
   @doc "Writes `info` (a plain string-keyed map, JSON-safe values only, same B2 rule `Repl.Launch` follows) to `path` (default: xipe_totec's own `info.json`). -> :ok | {:error, message}"
   @spec save(t(), Path.t()) :: :ok | {:error, String.t()}
-  def save(info, path \\ @default_path) when is_map(info) do
+  def save(info, path \\ __xt_default_path__()) when is_map(info) do
     case File.write(path, JSON.encode!(info) <> "\n") do
       :ok -> :ok
       {:error, why} -> {:error, "#{path} could not be written: #{:file.format_error(why)}"}
@@ -89,7 +88,7 @@ defmodule XipeTotec.Info do
   Does not touch `repls`.
   """
   @spec refresh_languages(t(), Path.t()) :: t()
-  def refresh_languages(info, dir \\ @language_dir) when is_map(info) do
+  def refresh_languages(info, dir \\ __xt_language_dir__()) when is_map(info) do
     declared = list_languages(dir)
 
     extensions =
@@ -125,7 +124,7 @@ defmodule XipeTotec.Info do
   module merely present under `dir` is `{:error, :not_registered}`.
   """
   @spec language_module(String.t(), t(), Path.t()) :: {:ok, module()} | {:error, :not_registered}
-  def language_module(name, info \\ load(), dir \\ @language_dir) do
+  def language_module(name, info \\ load(), dir \\ __xt_language_dir__()) do
     if name in (info["languages"] || []),
       do: {:ok, load_language_module(dir, name <> ".exs")},
       else: {:error, :not_registered}
@@ -159,11 +158,11 @@ defmodule XipeTotec.Info do
   end
 
   defp list_repls do
-    @scan_dir
+    __xt_scan_dir__()
     |> File.ls!()
-    |> Enum.filter(&File.dir?(Path.join(@scan_dir, &1)))
+    |> Enum.filter(&File.dir?(Path.join(__xt_scan_dir__(), &1)))
     |> Enum.flat_map(fn transport ->
-      @scan_dir
+      __xt_scan_dir__()
       |> Path.join(transport)
       |> File.ls!()
       |> Enum.filter(&String.ends_with?(&1, ".exs"))

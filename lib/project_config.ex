@@ -40,13 +40,12 @@ defmodule XipeTotec.ProjectConfig do
     "eval.boot_timeout" => {:number, 1_000, 1_800_000, "ms"}
   }
 
-  @defaults_file Path.expand("../defaults.json", __DIR__)
-
+  defp __xt_defaults_file__, do: Path.expand("../defaults.json", XipeTotecWithoutNix.Root.dir(__DIR__))
   @type t :: %{String.t() => term()}
 
   @doc "xipe_totec's own file of defaults (`defaults.json`)."
   @spec defaults_file() :: Path.t()
-  def defaults_file, do: @defaults_file
+  def defaults_file, do: __xt_defaults_file__()
 
   @doc "The project's own settings file."
   @spec file(Path.t()) :: Path.t()
@@ -57,7 +56,7 @@ defmodule XipeTotec.ProjectConfig do
   filled in (`nil`: the defaults alone).
   """
   @spec load(Path.t() | nil, Path.t()) :: t()
-  def load(project_dir, defaults_file \\ @defaults_file) do
+  def load(project_dir, defaults_file \\ __xt_defaults_file__()) do
     stored = if project_dir, do: project_dir |> read() |> Map.delete("path"), else: %{}
     defaults(defaults_file) |> deep_merge(known(stored))
   end
@@ -149,7 +148,7 @@ defmodule XipeTotec.ProjectConfig do
   defaults file (`nil` when even that doesn't have it: built in).
   """
   @spec entries(Path.t() | nil, Path.t()) :: [{String.t(), term(), Path.t() | nil}]
-  def entries(project_dir, defaults_file \\ @defaults_file) do
+  def entries(project_dir, defaults_file \\ __xt_defaults_file__()) do
     own = if project_dir, do: project_dir |> read() |> flat(), else: %{}
     from_file = defaults_file |> read_file() |> flat()
 

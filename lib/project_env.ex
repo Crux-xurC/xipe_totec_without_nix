@@ -46,7 +46,7 @@ defmodule XipeTotec.ProjectEnv do
 
   alias XipeTotec.ProjectConfig
 
-  @config Path.expand("../project_env.json", __DIR__)
+  defp __xt_config__, do: Path.expand("../project_env.json", XipeTotecWithoutNix.Root.dir(__DIR__))
   @default_timeout 120_000
   @formats ["env", "nix"]
   @max_output 16 * 1024 * 1024
@@ -72,7 +72,7 @@ defmodule XipeTotec.ProjectEnv do
   def resolve(_root, nil, _opts), do: {%{}, status(nil, "none")}
 
   def resolve(root, project_dir, opts) do
-    case read(Keyword.get(opts, :config, @config)) do
+    case read(Keyword.get(opts, :config, __xt_config__())) do
       {:error, message} ->
         {%{}, status(nil, "error", message <> " -- using xipe's own environment")}
 

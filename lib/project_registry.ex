@@ -25,13 +25,12 @@ defmodule XipeTotec.ProjectRegistry do
   the path again under a new id either (crux, 2026-10-16).
   """
 
-  @default_root Path.expand("../tables/project", __DIR__)
-
+  defp __xt_default_root__, do: Path.expand("../tables/project", XipeTotecWithoutNix.Root.dir(__DIR__))
   @type id :: String.t()
 
   @doc "Returns `path`'s existing id (after `Path.expand/1` normalization), or `nil` if no registered project matches."
   @spec find(String.t(), Path.t()) :: id() | nil | {:error, String.t()}
-  def find(path, root \\ @default_root) do
+  def find(path, root \\ __xt_default_root__()) do
     target = Path.expand(path)
     read = for {id, dir} <- entries(root), do: {id, dir, read_path(dir)}
 
@@ -49,7 +48,7 @@ defmodule XipeTotec.ProjectRegistry do
 
   @doc "The next id to assign: the highest existing id under `root` (default `0`, i.e. `\"000\"` is never assigned) + 1, zero-padded to 3 digits."
   @spec next_id(Path.t()) :: id()
-  def next_id(root \\ @default_root) do
+  def next_id(root \\ __xt_default_root__()) do
     max_id =
       case root |> entries() |> Enum.map(fn {id, _dir} -> String.to_integer(id) end) do
         [] -> 0
@@ -66,7 +65,7 @@ defmodule XipeTotec.ProjectRegistry do
   (`%{"path" => Path.expand(path)}`) into it before returning the new id.
   """
   @spec register(String.t(), Path.t()) :: id() | {:error, String.t()}
-  def register(path, root \\ @default_root) do
+  def register(path, root \\ __xt_default_root__()) do
     case find(path, root) do
       nil ->
         target = Path.expand(path)
@@ -88,7 +87,7 @@ defmodule XipeTotec.ProjectRegistry do
 
   @doc "The reverse of `find/2`: `{dir, path}` for a registered `id` (`dir` being its `tables/project/<id>_<name>/` directory, `path` the target project's own absolute path from `project.json`), or `nil` if no such id is registered."
   @spec lookup(id(), Path.t()) :: {Path.t(), String.t()} | nil | {:error, String.t()}
-  def lookup(id, root \\ @default_root) do
+  def lookup(id, root \\ __xt_default_root__()) do
     root
     |> entries()
     |> Enum.find_value(fn {entry_id, dir} ->

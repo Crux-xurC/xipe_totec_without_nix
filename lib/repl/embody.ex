@@ -6,10 +6,9 @@ defmodule XipeTotec.Repl.Embody do
   `embody` directory next to this xipe_totec checkout.
   """
 
-  @default_dir Path.expand("../../../embody", __DIR__)
-
+  defp __xt_default_dir__, do: Path.expand("../../../embody", XipeTotecWithoutNix.Root.dir(__DIR__))
   @spec dir() :: String.t()
-  def dir, do: Path.expand(System.get_env("XIPE_TOTEC_EMBODY_DIR") || @default_dir)
+  def dir, do: Path.expand(System.get_env("XIPE_TOTEC_EMBODY_DIR") || __xt_default_dir__())
 
   @doc "A file in it (`\"embody.ml\"`, `\"embody.hs\"`)."
   @spec path(String.t()) :: String.t()

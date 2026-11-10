@@ -23,6 +23,10 @@ defmodule XipeTotecWithoutNix.MixProject do
       # (bin/test); neither is part of a plain `mix test`
       test_load_filters: [&load_test?/1],
       test_ignore_filters: [&(not load_test?(&1))],
+      # erlexec only loaded: xipe_totec starts it when it first runs a program
+      # (ensure_all_started), after app/release_env.ex has cleaned the environment
+      # the release gave the VM -- erlexec's port program keeps the one it starts with
+      releases: [xipe_totec: [include_executables_for: [:unix], applications: [erlexec: :load]]],
       deps: deps()
     ]
   end
@@ -43,7 +47,7 @@ defmodule XipeTotecWithoutNix.MixProject do
       {:cowlib, "== 2.13.0", override: true},
       {:ranch, "== 2.1.0", override: true},
       {:gun, "== 2.1.0"},
-      {:erlexec, "== 2.3.4"}
+      {:erlexec, "== 2.3.4", runtime: false}
     ]
   end
 end

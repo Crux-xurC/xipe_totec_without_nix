@@ -14,6 +14,7 @@ This repository is generated from xipe_totec (Nix management) by [`sync/sync.sh`
 | xipe_totec (Nix management) | here |
 |---|---|
 | `nix develop`, then `xipe <args>` (`elixir main.exs <args>`) | `bin/xipe <args>` (put `bin/` on `PATH`, or link `bin/xipe` into it) |
+| (none) | `bin/release`: a release (Erlang's runtime included) that `bin/xipe` runs when built; the directory can then be moved |
 | BEAM packages from Nix | packages from Hex (`mix.lock`) |
 | `./test/run.sh` | `bin/test` (`bin/test --live` adds the tests with real REPLs) |
 
@@ -45,8 +46,8 @@ bin/xipe do row/add node=<id> args=[2,3] -- effect/set id=<id> effect=pure -- ev
 ```
 
 Xipe Totec keeps its state (`tables/`) and reads its settings (`info.json`, `pipelines.json`, `defaults.json`, `project_env.json`) in
-this directory, as xipe_totec does in its own: the paths are fixed when it is compiled, so move the directory and run `mix compile
---force` there.
+this directory, as xipe_totec does in its own. `bin/xipe` tells it where that is (`XIPE_TOTEC_HOME`); without it, the place it was
+compiled in is used.
 
 ## With tezcatl
 

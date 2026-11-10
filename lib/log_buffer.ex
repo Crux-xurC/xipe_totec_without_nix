@@ -22,11 +22,10 @@ defmodule XipeTotec.LogBuffer do
   """
 
   @max_lines 100
-  @default_file Path.expand("../tables/logging_buffer.txt", __DIR__)
-
+  defp __xt_default_file__, do: Path.expand("../tables/logging_buffer.txt", XipeTotecWithoutNix.Root.dir(__DIR__))
   @doc "xipe_totec's own buffer."
   @spec default_file() :: Path.t()
-  def default_file, do: @default_file
+  def default_file, do: __xt_default_file__()
 
   @doc "Adds `text`'s lines (or the given lines) at the end, dropping the oldest past #{@max_lines}."
   @spec append(Path.t() | nil, String.t() | [String.t()] | nil) :: :ok

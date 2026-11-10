@@ -22,16 +22,15 @@ defmodule XipeTotec.Session do
   `started_at`.
   """
 
-  @default_path Path.expand("../tables/session.json", __DIR__)
-
+  defp __xt_default_path__, do: Path.expand("../tables/session.json", XipeTotecWithoutNix.Root.dir(__DIR__))
   @type record :: %{String.t() => term()}
 
   @spec default_path() :: Path.t()
-  def default_path, do: @default_path
+  def default_path, do: __xt_default_path__()
 
   @doc "The live session's record, or `:none` (no file, unreadable, or its process is gone)."
   @spec read(Path.t()) :: {:ok, record()} | :none
-  def read(path \\ @default_path) do
+  def read(path \\ __xt_default_path__()) do
     with {:ok, text} <- File.read(path),
          {:ok, %{"os_pid" => _} = record} <- JSON.decode(text),
          true <- same_process?(record) do
@@ -43,7 +42,7 @@ defmodule XipeTotec.Session do
 
   @doc "Write `record` as this OS process's session (`os_pid` and `started_at` are filled in)."
   @spec write(record(), Path.t()) :: :ok | {:error, String.t()}
-  def write(record, path \\ @default_path) do
+  def write(record, path \\ __xt_default_path__()) do
     record =
       record
       |> Map.merge(owner())
@@ -59,7 +58,7 @@ defmodule XipeTotec.Session do
 
   @doc "Remove the record -- only if it is this OS process's own (never another session's)."
   @spec clear(Path.t()) :: :ok
-  def clear(path \\ @default_path) do
+  def clear(path \\ __xt_default_path__()) do
     with {:ok, text} <- File.read(path),
          {:ok, %{"os_pid" => pid}} <- JSON.decode(text),
          true <- pid == System.pid() do

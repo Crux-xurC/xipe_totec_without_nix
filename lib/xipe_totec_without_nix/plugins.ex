@@ -6,7 +6,7 @@ defmodule XipeTotecWithoutNix.Plugins do
   @files ["lib/repl/eval/scan/direct/iex.exs"]
 
   def load do
-    for f <- @files, do: Code.require_file(Path.expand("../../" <> f, __DIR__))
+    for f <- @files, do: Code.require_file(Path.expand("../../" <> f, XipeTotecWithoutNix.Root.dir(__DIR__)))
     :ok
   end
 end

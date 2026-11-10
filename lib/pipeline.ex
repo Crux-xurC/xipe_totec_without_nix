@@ -58,14 +58,13 @@ defmodule XipeTotec.Pipeline do
   # `__DIR__`-relative: `pipelines.json` belongs to this xipe_totec
   # checkout, not to the target project or to wherever the process was
   # started from.
-  @registry_file Path.expand("../pipelines.json", __DIR__)
-
+  defp __xt_registry_file__, do: Path.expand("../pipelines.json", XipeTotecWithoutNix.Root.dir(__DIR__))
   @type result :: {:ok, Book.t(), map()} | {:error, Book.t(), map()}
 
   @doc "Loads and parses `pipelines.json` (xipe_totec's own checkout root, not CWD-relative -- see the module attribute above). An absent or unparseable file yields an empty registry, never a crash."
   @spec load_registry() :: %{String.t() => [String.t()]}
   def load_registry do
-    with {:ok, bytes} <- File.read(@registry_file),
+    with {:ok, bytes} <- File.read(__xt_registry_file__()),
          {:ok, decoded} <- JSON.decode(bytes),
          true <- is_map(decoded) do
       decoded
