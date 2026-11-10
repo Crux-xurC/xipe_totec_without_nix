@@ -16,7 +16,17 @@
 #     application calls when it starts -- what main.exs's requires did
 #
 # A test that reads a compiled file's source by its path ("../lib/x.exs")
-# gets ".ex". # Also: main.exs -> lib/cli.ex without its last line (the call of
+# gets ".ex".
+#
+# Relocation: xipe_totec finds its own files (info.json, tables/ ...) with
+# Path.expand(<path>, __DIR__), which Mix fixes when it compiles. In compiled
+# files __DIR__ there becomes XipeTotecWithoutNix.Root.dir(__DIR__) (app/root.ex:
+# the same directory, or under $XIPE_TOTEC_HOME when that is set), and a module
+# attribute holding such a path (@x Path.expand(...)) becomes a private
+# function __xt_x__/0 evaluated when called, so a built release still finds
+# the files where it is installed. Unset, nothing changes.
+#
+# Also: main.exs -> lib/cli.ex without its last line (the call of
 # XipeTotec.CLI.main/1, which bin/xipe makes); tests without ExUnit.start
 # (test/test_helper.exs starts it). Any other require of a compiled file is an
 # error: this script must learn its form.
@@ -135,6 +145,24 @@ end
 
 Enum.each(files.("test/**/*_test.exs"), &process.(&1, :test))
 
+# --- relocation (see the head) ---
+attr_re = ~r/^(\s*)@(\w+) Path\.expand\(("[^"]*"), __DIR__\)\s*$/m
+
+for rel <- files.("lib/**/*.ex") do
+  abs = Path.join(dir, rel)
+  src = File.read!(abs)
+  names = Regex.scan(attr_re, src) |> Enum.map(fn [_, _, n, _] -> n end)
+
+  src =
+    Regex.replace(attr_re, src, fn _, ind, n, p ->
+      "#{ind}defp __xt_#{n}__, do: Path.expand(#{p}, XipeTotecWithoutNix.Root.dir(__DIR__))"
+    end)
+
+  src = Enum.reduce(names, src, fn n, s -> Regex.replace(~r/@#{n}(?![A-Za-z0-9_])/, s, "__xt_#{n}__()") end)
+  src = Regex.replace(~r/Path\.expand\(("[^"]*"), __DIR__\)/, src, "Path.expand(\\1, XipeTotecWithoutNix.Root.dir(__DIR__))")
+  File.write!(abs, src)
+end
+
 loads = :ets.tab2list(plugin_loads) |> Enum.map(&elem(&1, 1))
 File.mkdir_p!(Path.join(dir, "lib/xipe_totec_without_nix"))
 
@@ -147,7 +175,7 @@ defmodule XipeTotecWithoutNix.Plugins do
   @files #{inspect(loads)}
 
   def load do
-    for f <- @files, do: Code.require_file(Path.expand("../../" <> f, __DIR__))
+    for f <- @files, do: Code.require_file(Path.expand("../../" <> f, XipeTotecWithoutNix.Root.dir(__DIR__)))
     :ok
   end
 end

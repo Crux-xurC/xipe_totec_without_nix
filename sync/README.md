@@ -11,6 +11,7 @@ This repository's own files:
 | `README.md` | the entrance (upstream's README is `README.xipe_totec.md`) |
 | `mix.exs`, `mix.lock` | the Mix project (versions follow xipe_totec's `nix/relay-packages.nix`) |
 | `app/application.ex` | loads the plugins upstream's compiled files required (the generated `lib/xipe_totec_without_nix/plugins.ex`) |
+| `app/root.ex` | where xipe_totec's own files are: the compiled place, or under `$XIPE_TOTEC_HOME` (relocation, see `sync/transform.exs`) |
 | `bin/xipe` | the CLI (upstream: `elixir main.exs`) |
 | `bin/test` | the tests (upstream: `test/run.sh`) |
 | `test/test_helper.exs`, `test/isolated/test_helper.exs`, `test/live/test_helper.exs` | start ExUnit |
