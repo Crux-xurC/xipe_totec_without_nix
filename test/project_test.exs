@@ -179,7 +179,7 @@ defmodule ProjectTest do
     # declaration there too -- same real scanner, loaded here the way the
     # real declaration loads it (not left to whichever test ran first)
     File.write!(Path.join(lang_dir, "elixir.exs"), """
-    Code.require_file(#{inspect(Path.expand("../lib/scanner/elixir.exs", __DIR__))})
+    Code.require_file(#{inspect(Path.expand("../lib/scanner/elixir.ex", __DIR__))})
 
     defmodule ProjTestElixirLanguage#{suffix} do
       def extensions, do: ["ex", "exs"]

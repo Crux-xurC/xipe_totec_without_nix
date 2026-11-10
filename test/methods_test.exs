@@ -7,7 +7,7 @@ defmodule MethodsTest do
 
   alias XipeTotec.{Book, Dispatch, Methods}
 
-  @dispatch_source Path.expand("../lib/dispatch.exs", __DIR__)
+  @dispatch_source Path.expand("../lib/dispatch.ex", __DIR__)
 
   # the method names Dispatch.handle/4's clauses are written for
   defp dispatch_clause_names do
