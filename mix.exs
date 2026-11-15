@@ -26,7 +26,15 @@ defmodule XipeTotecWithoutNix.MixProject do
       # erlexec only loaded: xipe_totec starts it when it first runs a program
       # (ensure_all_started), after app/release_env.ex has cleaned the environment
       # the release gave the VM -- erlexec's port program keeps the one it starts with
-      releases: [xipe_totec: [include_executables_for: [:unix], applications: [erlexec: :load]]],
+      # cookie: fixed, so the same lock gives the same tarball (Mix makes a random
+      # one on each clean build); unused, as rel/env.sh.eex turns distribution off
+      releases: [
+        xipe_totec: [
+          include_executables_for: [:unix],
+          applications: [erlexec: :load],
+          cookie: "xipe-totec-no-distribution"
+        ]
+      ],
       deps: deps()
     ]
   end
