@@ -1,5 +1,6 @@
 .gitignore
 LICENSE
+README.full.md
 README.xipe_totec.md
 defaults.json
 document/evolving.md
