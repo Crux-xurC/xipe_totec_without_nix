@@ -18,6 +18,7 @@ This repository's own files:
 | `rel/env.sh.eex` | the release without Erlang distribution (Mix's default would listen on every interface, behind a cookie the tarball carries) |
 | `bin/test` | the tests (upstream: `test/run.sh`) |
 | `test/test_helper.exs`, `test/isolated/test_helper.exs`, `test/live/test_helper.exs` | start ExUnit |
-| `sync/` | this, `sync.sh`, `transform.exs`, `gitignore.extra`, `replaced.txt` (upstream files replaced by work of this repository; upstream's versions in `sync/upstream/`), `UPSTREAM` |
+| `sync/` | this, `sync.sh`, `transform.exs`, `gitignore.extra`, `replaced.txt` (upstream files replaced by work of this repository; upstream's versions in `sync/upstream/`), `UPSTREAM` (the upstream commit) and `UPSTREAM_TREE` (its tree, compared with upstream's `main` by tezcatlipoca's `build.sh` and by CI) |
+| `.github/workflows/test.yml` | CI without Nix: the tests on Elixir from setup-beam, and how far `sync/UPSTREAM_TREE` is from upstream's `main` |
 
 To update: `sync/sync.sh ~/path/to/xipe_totec`, review `git diff`, `bin/test`, commit with the upstream commit in the message.

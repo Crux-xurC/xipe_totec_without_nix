@@ -1,0 +1,32 @@
+# The tests (bin/test: mix test, then test/isolated/ one file at a time) on
+# every push and pull request, without Nix: Elixir and Erlang/OTP from
+# setup-beam, embody cloned next to the checkout as the README asks.
+# bin/test needs Elixir 1.19 (test_load_filters). The tests with real REPLs
+# (bin/test --live) need each language's tools and are run by hand. The
+# `upstream` job says when sync/UPSTREAM_TREE is not xipe_totec's main (a
+# notice, not a failure: tezcatlipoca's build.sh refuses it at a release).
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: git clone --depth 1 https://github.com/Crux-xurC/embody.git ../embody
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+      - run: mix deps.get
+      - run: bin/test
+  upstream:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git clone --quiet --depth 1 --filter=blob:none https://github.com/Crux-xurC/xipe_totec.git /tmp/upstream
+          main=$(git -C /tmp/upstream rev-parse 'HEAD^{tree}')
+          if [ "$main" = "$(cat sync/UPSTREAM_TREE)" ]; then echo "in step with xipe_totec's main"
+          else echo "::notice::not in step with xipe_totec's main (sync/UPSTREAM_TREE $(cat sync/UPSTREAM_TREE), main's tree $main): sync/sync.sh"; fi

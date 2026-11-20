@@ -83,6 +83,39 @@ defmodule DispatchTest do
       assert {:ok, _book, %{"row" => %{args: ["1", "2", "3"]}}} = Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => ["1", "2", "3"]}, %{})
     end
 
+    test "checks args against the node's shape: every parameter list's count (D-anykey-shape)" do
+      book = Book.new() |> Core.put_node("n1", %{module: "calc.Calc", name: "f", anykey: "(Int, Int)(String)", shape: [2, 1]})
+      assert {:ok, _book, %{"row" => %{args: ["1", "2", "\"a\""]}}} = Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => ["1", "2", "\"a\""]}, %{})
+
+      assert {:error, ^book, %{"message" => message}} = Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => ["1", "2"]}, %{})
+      assert message =~ "calc.Calc.f(Int, Int)(String) takes 3 (2 + 1, one count per parameter list) arg(s), got 2"
+    end
+
+    test "arity/set on a node of one parameter list (C#'s optional parameters): fewer arguments then accepted; several lists refused" do
+      book = Book.new() |> Core.put_node("n1", %{module: "N.T", name: "Opt", anykey: "(int, int)", shape: [2]})
+      assert {:error, ^book, %{"message" => m}} = Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => ["1"]}, %{})
+      assert m =~ "takes 2 arg(s), got 1"
+
+      assert {:ok, book, %{"arities" => [1, 2], "label" => "N.T.Opt(int, int)/1..2"}} =
+               Dispatch.handle(book, "arity/set", %{"id" => "n1", "arities" => [1, 2]}, %{})
+      assert {:ok, _book, %{"row" => %{args: ["1"]}}} = Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => ["1"]}, %{})
+      assert {:error, _, %{"message" => m}} = Dispatch.handle(book, "arity/set", %{"id" => "n1", "arities" => [2, 3]}, %{})
+      assert m =~ "takes at most 2 arg(s)"
+
+      book = Book.new() |> Core.put_node("n2", %{module: "c.C", name: "f", anykey: "(Int)(Int)", shape: [1, 1]})
+      assert {:error, _, %{"message" => m}} = Dispatch.handle(book, "arity/set", %{"id" => "n2", "arities" => [1, 2]}, %{})
+      assert m =~ "several parameter lists"
+    end
+
+    test "rejects a node the scanner gave a refusal, with its reason (D-node-marks)" do
+      book = Book.new() |> Core.put_node("n1", %{module: "N.T", name: "Make", anykey: "()", shape: [0], refusal: "its type parameter T appears in no parameter"})
+
+      assert {:error, ^book, %{"code" => "invalid_params", "message" => message}} =
+               Dispatch.handle(book, "row/add", %{"node" => "n1", "args" => []}, %{})
+
+      assert message == "row/add: N.T.Make() can't be a row: its type parameter T appears in no parameter"
+    end
+
     test "rejects a private node: the REPL can't call it" do
       book = Book.new() |> Core.put_node("n1", %{module: "M", name: "f", anykey: 1, visibility: "private"})
 

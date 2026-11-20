@@ -25,18 +25,78 @@ defmodule InfoTest do
     info = %{"languages" => [], "repls" => ["placeholder"], "project" => nil}
     refreshed = Info.refresh_languages(info)
 
-    assert refreshed["languages"] == ["elixir", "haskell", "ocaml"]
-    assert refreshed["extensions"] == %{"ex" => ["elixir"], "exs" => ["elixir"], "hs" => ["haskell"], "ml" => ["ocaml"]}
-    # each language's REPL and build-tool priority list
-    assert refreshed["language_repls"] == %{"elixir" => "iex", "haskell" => "ghci", "ocaml" => "ocaml"}
+    js_tools = [
+      %{"name" => "pnpm", "markers" => ["pnpm-lock.yaml"]},
+      %{"name" => "yarn", "markers" => ["yarn.lock"]},
+      %{"name" => "bun", "markers" => ["bun.lockb", "bun.lock"]},
+      %{"name" => "npm", "markers" => ["package-lock.json", "package.json"]}
+    ]
+
+    assert refreshed["languages"] == ["csharp", "elixir", "fsharp", "go", "haskell", "java", "javascript", "ocaml", "php", "python", "scala", "typescript"]
+
+    assert refreshed["extensions"] == %{
+             "ex" => ["elixir"],
+             "exs" => ["elixir"],
+             "cs" => ["csharp"],
+             "fs" => ["fsharp"],
+             "go" => ["go"],
+             "fsx" => ["fsharp"],
+             "hs" => ["haskell"],
+             "java" => ["java"],
+             "php" => ["php"],
+             "ml" => ["ocaml"],
+             "py" => ["python"],
+             "scala" => ["scala"],
+             "sc" => ["scala"],
+             "js" => ["javascript"],
+             "mjs" => ["javascript"],
+             "cjs" => ["javascript"],
+             "jsx" => ["javascript"],
+             "ts" => ["typescript"],
+             "tsx" => ["typescript"],
+             "mts" => ["typescript"],
+             "cts" => ["typescript"]
+           }
+
+    # each language's REPL (none: a map-only language) and build-tool priority list
+    assert refreshed["language_repls"] == %{
+             "elixir" => "iex",
+             # C#'s window is F#'s (evolving.md §4.4)
+             "csharp" => "fsi",
+             "fsharp" => "fsi",
+             "haskell" => "ghci",
+             # Java's window is Scala's (evolving.md §4.6)
+             "java" => "scala",
+             "ocaml" => "ocaml",
+             "python" => "python",
+             "scala" => "scala",
+             "javascript" => nil,
+             "typescript" => nil,
+             # map-only (evolving.md §4.3, §4.7)
+             "go" => nil,
+             "php" => nil
+           }
 
     assert refreshed["build_tools"] == %{
              "elixir" => [%{"name" => "mix", "markers" => ["mix.exs"]}],
+             "csharp" => [%{"name" => "dotnet", "markers" => ["*.csproj", "*.sln", "*.slnx"]}],
+             "fsharp" => [%{"name" => "dotnet", "markers" => ["*.fsproj", "*.sln", "*.slnx"]}],
              "haskell" => [
                %{"name" => "stack", "markers" => ["stack.yaml"]},
                %{"name" => "cabal", "markers" => ["*.cabal", "cabal.project"]}
              ],
-             "ocaml" => [%{"name" => "dune", "markers" => ["dune-project"]}]
+             "java" => [%{"name" => "maven", "markers" => ["pom.xml"]}],
+             "go" => [%{"name" => "go", "markers" => ["go.mod"]}],
+             "php" => [%{"name" => "composer", "markers" => ["composer.json"]}],
+             "ocaml" => [%{"name" => "dune", "markers" => ["dune-project"]}],
+             "python" => [
+               %{"name" => "uv", "markers" => ["uv.lock"]},
+               %{"name" => "poetry", "markers" => ["poetry.lock"]},
+               %{"name" => "pip", "markers" => ["pyproject.toml", "requirements.txt", "setup.py"]}
+             ],
+             "scala" => [%{"name" => "sbt", "markers" => ["build.sbt"]}, %{"name" => "scala-cli", "markers" => ["project.scala"]}],
+             "javascript" => js_tools,
+             "typescript" => js_tools
            }
 
     assert refreshed["repls"] == ["placeholder"]
@@ -93,9 +153,12 @@ defmodule InfoTest do
     refreshed = Info.refresh_repls(info)
 
     assert refreshed["repls"] == [
+             %{"transport" => "direct", "repl" => "fsi"},
              %{"transport" => "direct", "repl" => "ghci"},
              %{"transport" => "direct", "repl" => "iex"},
-             %{"transport" => "direct", "repl" => "ocaml"}
+             %{"transport" => "direct", "repl" => "ocaml"},
+             %{"transport" => "direct", "repl" => "python"},
+             %{"transport" => "direct", "repl" => "scala"}
            ]
     assert refreshed["languages"] == ["placeholder"]
   end

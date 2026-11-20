@@ -47,20 +47,21 @@ defmodule XipeTotec.Dispatch do
     end
   end
 
-  def handle(book, "row/add", %{"node" => node_id, "args" => args}, ctx)
+  def handle(book, "row/add", %{"node" => node_id, "args" => args} = params, ctx)
       when is_binary(node_id) and is_list(args) do
     # A calc row is one call to one scanned node, so the node has to exist
     # and the args have to match its arity -- checked here rather than left
     # to the REPL, where an arity mismatch would only surface as a crash at
     # eval time.
-    case check_args(book, node_id, args, "row/add", ctx[:root]) do
-      :ok ->
-        id = Id.ulid()
-        new_book = Core.add_call(book, id, %{node: node_id, args: args})
-        {:ok, new_book, %{"id" => id, "row" => Book.get(new_book, :calls, id)}}
-
-      {:error, error} ->
-        {:error, book, error}
+    with :ok <- check_origin(params["origin"]),
+         :ok <- check_args(book, node_id, args, "row/add", ctx[:root]),
+         :ok <- check_evaluated(book, node_id, "row/add", ctx) do
+      id = Id.ulid()
+      # whose row it is (D-mcp-shared-book): "manual" unless a client says "agent"
+      new_book = Core.add_call(book, id, %{node: node_id, args: args, origin: params["origin"] || "manual"})
+      {:ok, new_book, %{"id" => id, "row" => Book.get(new_book, :calls, id)}}
+    else
+      {:error, error} -> {:error, book, error}
     end
   end
 
@@ -90,6 +91,48 @@ defmodule XipeTotec.Dispatch do
     end
   end
 
+  # D-mcp-effects: an agent's class, with its reason, never trusted by the
+  # evaluator; a person approves it with effect/approve
+  def handle(book, "effect/propose", %{"id" => node_id, "effect" => effect, "reason" => reason}, _ctx)
+      when is_binary(node_id) and effect in ["pure", "reads", "writes"] and is_binary(reason) do
+    reason = reason |> String.split() |> Enum.join(" ")
+
+    cond do
+      Book.get(book, :nodes, node_id) == nil ->
+        {:error, book, not_found("node", node_id)}
+
+      reason == "" ->
+        {:error, book, invalid_params("effect/propose needs a reason (one line: why this class)")}
+
+      true ->
+        case Core.propose_effect(book, node_id, effect, reason) do
+          {:ok, new_book} -> {:ok, new_book, %{"id" => node_id, "effect" => effect, "effect_source" => "agent", "reason" => reason}}
+          {:error, message} -> {:error, book, invalid_params("effect/propose: " <> message)}
+        end
+    end
+  end
+
+  def handle(book, "effect/propose", _params, _ctx),
+    do: {:error, book, invalid_params("effect/propose needs id (string), effect (pure|reads|writes) and reason (string)")}
+
+  def handle(book, "effect/approve", %{"ids" => ids}, _ctx) when is_list(ids) and ids != [] do
+    if Enum.all?(ids, &is_binary/1) do
+      case Core.approve(book, ids) do
+        {:ok, new_book, rows} ->
+          approved = for row <- rows, do: %{"id" => row.id, "effect" => row.effect, "label" => Core.node_label(row)}
+          {:ok, new_book, %{"approved" => approved}}
+
+        {:error, message} ->
+          {:error, book, invalid_params("effect/approve: nothing approved -- " <> message)}
+      end
+    else
+      {:error, book, invalid_params("effect/approve needs ids ([string])")}
+    end
+  end
+
+  def handle(book, "effect/approve", _params, _ctx),
+    do: {:error, book, invalid_params("effect/approve needs ids ([string], at least one)")}
+
   # the argument counts a function with default arguments can be called with
   #: a person declares them, as effect/set -- the scanner
   # only suggests (a refused row/add, scan/run's arity_misses)
@@ -101,17 +144,20 @@ defmodule XipeTotec.Dispatch do
       node == nil ->
         {:error, book, not_found("node", node_id)}
 
-      not is_integer(node[:anykey]) ->
+      match?([_, _ | _], node[:shape]) ->
+        {:error, book, invalid_params("arity/set: #{Core.node_label(node)} has several parameter lists (fewer arguments for them are not decided)")}
+
+      declared_count(node) == nil ->
         {:error, book, invalid_params("arity/set: #{Core.node_label(node)} has no argument count (this language's node is not told apart by arity)")}
 
       as == [] or Enum.any?(as, &is_nil/1) ->
         {:error, book, invalid_params("arity/set needs arities (whole numbers, e.g. arities=[1,2])")}
 
-      node.anykey not in as ->
-        {:error, book, invalid_params("arity/set: arities must include #{node.anykey} (#{Core.node_label(node)} as defined)")}
+      declared_count(node) not in as ->
+        {:error, book, invalid_params("arity/set: arities must include #{declared_count(node)} (#{Core.node_label(node)} as defined)")}
 
-      Enum.any?(as, &(&1 > node.anykey)) ->
-        {:error, book, invalid_params("arity/set: #{Core.node_label(node)} takes at most #{node.anykey} arg(s)")}
+      Enum.any?(as, &(&1 > declared_count(node))) ->
+        {:error, book, invalid_params("arity/set: #{Core.node_label(node)} takes at most #{declared_count(node)} arg(s)")}
 
       true ->
         new_book = Core.set_arities(book, node_id, as)
@@ -466,6 +512,16 @@ defmodule XipeTotec.Dispatch do
   def handle(book, method, _params, _ctx),
     do: {:error, book, %{"code" => "unknown_method", "message" => method}}
 
+  # the arguments a node takes as defined: Elixir's integer anykey, else a
+  # shape of one parameter list (C#'s methods: optional parameters counted)
+  defp declared_count(node) do
+    case {node[:anykey], node[:shape]} do
+      {key, _} when is_integer(key) -> key
+      {_, [n]} -> n
+      _ -> nil
+    end
+  end
+
   @doc """
   Whether `args` can be a calc row's arguments for node `node_id`: a list of
   strings, for a node that exists, isn't private, and (when its anykey is
@@ -488,11 +544,21 @@ defmodule XipeTotec.Dispatch do
       node[:visibility] == "private" ->
         {:error, invalid_params("#{method}: #{Core.node_label(node)} is private; the REPL can't call it")}
 
-      # only an integer anykey is an argument count (Scanner.Elixir's arity);
-      # another scanner's anykey says nothing about how many args to expect.
-      # Default arguments: the counts a person declared (arity/set)
+      # a reason the scanner gave (D-node-marks): C#'s `Make<T>()`, whose
+      # type parameter appears in no parameter, would run as obj
+      is_binary(node[:refusal]) ->
+        {:error, invalid_params("#{method}: #{Core.node_label(node)} can't be a row: #{node.refusal}")}
+
+      # the node's shape (one count per parameter list, D-anykey-shape), else
+      # an integer anykey (Scanner.Elixir's arity); another scanner's anykey
+      # says nothing about how many args to expect. Default arguments: the
+      # counts a person declared (arity/set)
       is_list(Core.accepted_arities(node)) and length(args) not in Core.accepted_arities(node) ->
-        takes = node |> Core.accepted_arities() |> Core.arities_text()
+        takes =
+          case node[:shape] do
+            [_, _ | _] = shape -> "#{Enum.sum(shape)} (#{Enum.join(shape, " + ")}, one count per parameter list)"
+            _ -> node |> Core.accepted_arities() |> Core.arities_text()
+          end
 
         {:error,
          invalid_params("#{method}: #{Core.node_label(node)} takes #{takes} arg(s), got #{length(args)}: #{inspect(args)}" <>
@@ -500,6 +566,23 @@ defmodule XipeTotec.Dispatch do
 
       true ->
         :ok
+    end
+  end
+
+  # a calc row of a map-only language (Repl.Language) would never be
+  # evaluated: refused when made. The language is the file's extension's
+  # (info.json); refused only when every language of that extension is
+  # map-only. `ctx.info` (tests) or info.json
+  defp check_evaluated(book, node_id, method, ctx) do
+    info = ctx[:info] || XipeTotec.Info.load()
+
+    with %{sheet: sheet_id} = node <- Book.get(book, :nodes, node_id),
+         %{path: path} <- Book.get(book, :sheets, sheet_id),
+         [_ | _] = languages <- Map.get(info["extensions"] || %{}, path |> Path.extname() |> String.trim_leading("."), []),
+         true <- Enum.all?(languages, &XipeTotec.Info.map_only?(&1, info)) do
+      {:error, invalid_params("#{method}: #{Core.node_label(node)} -- " <> XipeTotec.Repl.Language.map_only_reason(hd(languages)))}
+    else
+      _ -> :ok
     end
   end
 
@@ -687,4 +770,9 @@ defmodule XipeTotec.Dispatch do
 
     {:ok, new_book, if(project_dir, do: Map.put(result, "env", env_status), else: result)}
   end
+
+  defp check_origin(nil), do: :ok
+  defp check_origin(origin) when origin in ["manual", "agent"], do: :ok
+  defp check_origin(_), do: {:error, invalid_params("row/add: origin is manual or agent")}
+
 end

@@ -3,7 +3,7 @@
 **The question this document answers**: someone who wants to add a language or a command to Xipe Totec (and the AI they work with) —
 what do they start from, and what behaviour must they meet?
 
-Xipe Totec is a tool for functional-language projects and also a base on which anyone can put languages and commands. This document is
+Xipe Totec is a tool for a project's functions (functional languages first, now others too) and also a base on which anyone can put languages and commands. This document is
 modelled on the steps actually taken when OCaml and Haskell were added on 2026-09-27
 ([D-ocaml-adapter](verification/lib-repl-language-ocaml.exs.md#d-ocaml-adapter),
 [D-haskell-adapter](verification/lib-repl-language-haskell.exs.md#d-haskell-adapter)). What it says was checked against the code of the
@@ -144,6 +144,11 @@ makes `xipe table generate` fill the surface table's `build_tool` column, which 
 | Elixir | mix | `iex -S mix` |
 | OCaml | dune | dependency libraries read from `dune ocaml top` (without the lines of its own `.cma`); aliases made for wrapped libraries |
 | Haskell | cabal, stack | `ghci` started under `cabal exec --offline --` (after `cabal build --offline all`) / `stack exec --` |
+| Python | uv, poetry, pip | none: the project's `.venv/bin/python` when it exists, else `python3` from its environment |
+| F# | dotnet | every `*.fsproj` built by `dotnet build` (into a temp dir, from an empty package source) before `dotnet fsi` starts, and `#r`-ed; `.fsx` scripts loaded as definitions-only copies |
+| C# | dotnet | as F#'s: every `*.csproj` built by `dotnet build` (temp dir, empty package source) and `#r`-ed into `dotnet fsi`, with C#'s seam `embody.cs` built beside it; embody's protocol checked first |
+| Java | maven | every module compiled by `mvn -o` (offline), its classes and class path on the JVM's class path of Scala's REPL (`java -cp <scala home>/lib/*:… dotty.tools.repl.Main -usejavacp`), with Java's seam `embody.java` compiled beside it by `javac`; embody's protocols checked first |
+| Scala 3 | sbt, scala-cli | the build tool builds the project and gives the compiler of its Scala version and the class path (sbt: temporary tasks printed in one run; scala-cli: `--print-class-path`), offline; the REPL is `java … dotty.tools.repl.Main` on them; `.sc` scripts loaded as definitions-only copies. One module per build tool (`lib/repl/scala/build_tool.exs`) |
 
 In every case Xipe Totec loads the project's own code from source (without side effects). Leaving everything to the build tool's REPL
 (`cabal repl` …) is not taken: embody cannot be added, components cannot load together.

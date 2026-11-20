@@ -1,14 +1,15 @@
 # Xipe Totec
 
-A standalone local server and CLI that brings the structure of a spreadsheet to a functional-language project: cells with
-addresses, references to addresses, and a way to evaluate again by following the references in order.
+A standalone local server and CLI that brings the structure of a spreadsheet to a project's functions: cells with
+addresses, references to addresses, and a way to evaluate again by following the references in order. It began with functional
+languages and now also serves Python, C#, Scala and Java, with side effects kept apart by classes a person sets (P1 below).
 
 The name comes from the image of peeling a skin (a card) off the body of the source, one function at a time. Every rescan gives
 new skins.
 
 Written in Elixir. Application `:xipe_totec`, module `XipeTotec`, CLI command `xipe`. It works on its own from the command line;
 [tezcatl](https://github.com/Crux-xurC/tezcatl), a browser-side development environment in a separate repository, can be its window
-(see "With tezcatl" below). OCaml and Haskell evaluation use [embody](https://github.com/Crux-xurC/embody), also a separate repository.
+(see "With tezcatl" below). OCaml, Haskell, Python, F#, C#, Scala and Java evaluation use [embody](https://github.com/Crux-xurC/embody), also a separate repository.
 
 ---
 
@@ -47,10 +48,11 @@ of references ([D-references-list](document/verification/lib-graph_query.exs.md#
 - **It runs your code for real.** Evaluating a calc row calls the function in the target project's REPL. Nothing is sandboxed: if a
   function writes files, sends messages or deletes data, that really happens.
 - **Only functions you classified are evaluated.** A function's side-effect class (`pure` / `reads` / `writes`) counts only when you
-  set it with `effect/set`; unclassified functions are not evaluated, and `writes` only with `--include-writes`. If you classify a
-  function wrongly, its side effects still happen.
+  set it with `effect/set` (or approved a proposal with `effect/approve`), and only for the body you classified: after the function's
+  body changes, it waits for your approval again. Unclassified functions are not evaluated, and `writes` only with `--include-writes`.
+  If you classify a function wrongly, its side effects still happen.
 - **Loading the target runs none of its top-level code** (scripts-mode compiles only the `defmodule` parts; OCaml and Haskell skip
-  top-level expressions and `main`). A Mix project is started with `iex -S mix`, which starts its application.
+  top-level expressions and `main`; Python, F# and Scala scripts are loaded with their definitions only). A Mix project is started with `iex -S mix`, which starts its application; a Scala `object`'s body runs when the object is first used.
 - **Local only, no authentication.** `xipe start` binds to `127.0.0.1` only and has no authentication. A WebSocket handshake that
   carries an `Origin` header (a browser) is refused unless that origin is listed in `XIPE_TOTEC_ALLOWED_ORIGINS`, so web pages cannot
   drive it directly; any other local program can. Use it on a machine where you trust the local users and programs.
@@ -69,9 +71,13 @@ What is promised to work, and what happens outside the promise, is in [`document
 
 - **Nix** with flakes, on `x86_64-linux`. `nix develop` gives Elixir 1.18 / OTP 27 and the Erlang packages it uses (cowboy, gun,
   erlexec). There is no build without Nix yet.
-- For **OCaml** and **Haskell** projects: `ocaml` / `ghci` in the target's environment (a flake, direnv or mise declared in
+- For **OCaml**, **Haskell**, **Python**, **F#**, **C#**, **Scala 3** and **Java** projects: `ocaml` / `ghci` / `python3` (or the project's `.venv`) / `dotnet` (F# and C#; C# is evaluated in F# Interactive) / `scala` with `sbt` or `scala-cli` / `java`, `javac`, `mvn` and `scala` (Java is evaluated in Scala's REPL) in the target's environment (a flake, direnv or mise declared in
   `project_env.json`, or on `PATH`), and [embody](https://github.com/Crux-xurC/embody) cloned next to this repository (or
-  `XIPE_TOTEC_EMBODY_DIR` pointing at it).
+  `XIPE_TOTEC_EMBODY_DIR` pointing at it). Update the two together: an adapter speaks to its embody file by a protocol, and an
+  evaluation started with an embody file of another protocol ends at once saying embody must be updated — Scala's `embody.scala`
+  (`Embody.protocol`; this xipe_totec: 2), C#'s seam `embody.cs` (`EmbodyCs.Seam.Protocol`; this xipe_totec: 1) and Java's seam
+  `embody.java` (`embodyjava.embody.PROTOCOL`; this xipe_totec: 1).
+- For **Go** and **PHP** projects (maps only): `go` / `php` in the target's environment, to read them by their own parsers.
 - Optional: **elixir-ls** for scanning Elixir (without it, Xipe Totec's own scanner is used).
 
 ---
@@ -80,7 +86,7 @@ What is promised to work, and what happens outside the promise, is in [`document
 
 ```
 git clone https://github.com/Crux-xurC/xipe_totec.git
-git clone https://github.com/Crux-xurC/embody.git        # only for OCaml / Haskell
+git clone https://github.com/Crux-xurC/embody.git        # only for OCaml / Haskell / Python / F# / C# / Scala / Java; update it with xipe_totec
 cd xipe_totec
 nix develop                                             # gives the `xipe` command
 
@@ -127,6 +133,8 @@ xipe start [<dir>] [--port N] [--lsp <url>] [--fs-root <dir>]
                            # from TEZCATL_RELAY_PORT/TEZCATL_FS_ROOT inherited from tezcatl.
                            # tezcatl starts it without <dir> (the target is the chosen project:
                            # xipe_totec decides, tezcatl is the window); it passes --port, --lsp, --fs-root
+xipe mcp [--port N]        # an MCP server over stdio for an AI agent, through the running xipe start
+                           # (started by the MCP client; document/mcp.md)
 xipe refresh -l|-r|-a      # update xipe_totec's own info.json (languages and extensions, the REPL adapter list)
 xipe help [<command>]      # one command a line (`command: description  arguments`); <command> for its description
 
@@ -154,14 +162,29 @@ Hex packages it uses (cowboy, gun, erlexec …) come from `nix/relay-packages.ni
 
 ## How far it works now
 
-As of 2026-10-31, all 50 files and 568 cases of `./test/run.sh` pass. Apart from them there are tests that start real REPLs
-(`test/live/`: `iex` 12, `ocaml` 6, `ghci` 7; the OCaml and Haskell ones are skipped when their system is not on PATH).
+As of 2026-11-20, all 55 files and 630 cases of `./test/run.sh` pass. Apart from them there are tests that start real REPLs
+(`test/live/`: `iex` 12, `ocaml` 6, `ghci` 7, `python3` 5, `dotnet fsi` 11, C# through `dotnet fsi` 4, Scala's REPL 10, Java through Scala's REPL 7, Go's and PHP's maps 4; the OCaml, Haskell, Python, F#, C#, Scala, Java, Go and PHP ones are skipped when their system is not on PATH).
 
 **From the CLI, scan → making calc rows → real evaluation → persisting the results works end to end for Elixir projects.** OCaml
 (`.ml`) works the same way; for dune projects the libraries depended on are loaded from `dune ocaml top`
 ([D-ocaml-adapter](document/verification/lib-repl-language-ocaml.exs.md#d-ocaml-adapter)). So does Haskell (`.hs`); for cabal and
 stack projects GHCi is started under `cabal exec` / `stack exec` so dependency packages are visible
-([D-haskell-adapter](document/verification/lib-repl-language-haskell.exs.md#d-haskell-adapter)). Both the mix layout (`iex -S mix`)
+([D-haskell-adapter](document/verification/lib-repl-language-haskell.exs.md#d-haskell-adapter)). So does Python (`.py`), each file imported
+without its top-level statements through `embody.py`
+([D-python-adapter](document/verification/lib-repl-language-python.exs.md#d-python-adapter)). So does F# (`.fs`, `.fsx`): projects built by
+`dotnet build`, scripts loaded with their definitions only, evaluated in F# Interactive through `embody.fsx` and read by F#'s own parser
+([D-fsharp-adapter](document/verification/lib-repl-language-fsharp.exs.md#d-fsharp-adapter)). So does C# (`.cs`): projects built by
+`dotnet build`, public static methods called in F# Interactive (F#'s window: the arguments are F#) through `embody.fsx` and C#'s seam
+`embody.cs` (`Task`s awaited, records written as their constructor's call, failures in C#'s terms), read as text
+([D-csharp-adapter](document/verification/lib-repl-language-csharp.exs.md#d-csharp-adapter)). So does Java (`.java`): maven projects
+compiled offline, public static methods called in Scala's REPL (Scala's window: the arguments are Scala) through `embody.scala` and
+Java's seam `embody.java` (futures awaited, records and `java.util` values written as their constructors, failures in Java's terms), read
+by the JDK's own parser ([D-java-adapter](document/verification/lib-repl-language-java.exs.md#d-java-adapter)). So does Scala 3 (`.scala`, `.sc`): the class path and
+the compiler of the project's own version from sbt or scala-cli, nothing fetched, scripts loaded with their definitions only, evaluated
+in Scala's REPL through `embody.scala` and read by Scala's own parser
+([D-scala-adapter](document/verification/lib-repl-language-scala.exs.md#d-scala-adapter)). JavaScript and TypeScript are scanned
+only — cards and links, no evaluation — and so are Go and PHP, read by their own parsers (`go/parser`, PHP's `token_get_all`)
+([D-map-only-language](document/verification/lib-repl-language.exs.md#d-map-only-language)). Both the mix layout (`iex -S mix`)
 and the script layout are supported. In the script layout only the `defmodule` parts of each file are compiled, with the original
 file's path and line numbers (the loading script of `Repl.SourceSanitize`; top-level side effects are not run; error positions and
 `__DIR__` point at the original file).
@@ -197,6 +220,7 @@ The methods (the same over `xipe do` and the WebSocket):
 | For the window | `input` (takes one line as it is and reads it as the CLI would; for tezcatl's dialogue window) | implemented ([D-input-line](document/verification/lib-serve_input.exs.md#d-input-line)) |
 | Passes | `eval/status` (the pass being evaluated now; rows in it cannot be changed), `eval/cancel` (stop the running pass, take a waiting one out of the queue; records nothing) | implemented ([D-passes](document/verification/lib-passes.exs.md#d-passes)) |
 | Lists and settings | `roster` (the tables and columns `search` can look up), `card/list` (the whole list of functions, with file, line, class and the number of calc rows), the columns `path` and `line` of `row/list`, `row/set-prev` (set the expected value by hand), `row/set-args` (change only the arguments, without evaluating), `config/set` (change one of the project's settings) | implemented |
+| Classes | `effect/propose` (an agent's class with a one-line reason; evaluates nothing), `effect/approve` (a person takes proposed classes, and ones a changed body took back, many at once) | implemented ([D-effect-approval](document/verification/lib-core.exs.md#d-effect-approval)) |
 | Arity | `arity/set` (a person decides how many arguments a function with default arguments is called with; used by `row/add` and links) | implemented ([D-arity-set](document/verification/lib-core.exs.md#d-arity-set)) |
 | Evaluation | `eval`, `eval/run` | implemented. On the CLI (`xipe eval` / `xipe do ... eval`) synchronous, under `xipe serve` asynchronous (returns a `pass_id`). `eval/run` goes through `Pipeline` (`["eval"]`) |
 | Through Pipeline | `row/update` | implemented. `["edit", "eval"]`: change the arguments and evaluate that row alone ([D-pipeline](document/verification/lib-pipeline.exs.md#d-pipeline)) |
@@ -207,8 +231,7 @@ Several projects can be handled. Once `xipe choice project` chooses the target, 
 (`tables/project/<id>_<name>/book.jsonl`).
 
 **What is in progress is more languages.** The table that decides language, REPL and build tool (`SurfaceTable`) is in place, with
-Elixir (+ mix), OCaml (+ dune) and Haskell (+ stack, cabal). For the rest see [`document/scope.md`](document/scope.md) ("Work not
-started").
+Elixir (+ mix), OCaml (+ dune), Haskell (+ stack, cabal), Python (+ uv, poetry, pip), F# (+ dotnet), C# (+ dotnet, evaluated in F# Interactive), Scala 3 (+ sbt, scala-cli) and Java (+ maven, evaluated in Scala's REPL). JavaScript, TypeScript, Go (+ go) and PHP (+ composer) are in it as maps only (scanned, not evaluated; Go and PHP read by their own parsers). That completes the languages for now; what is left to the users (evaluating Go and PHP, Rust alone, gradle …) is in [`document/evolving.md`](document/evolving.md) §8.
 
 ---
 
@@ -228,7 +251,8 @@ started").
 | P10 | It runs in the target project's environment. Evaluation, tracing and parsing happen inside the target project's REPL |
 
 P1 in concrete form: side-effect classes (`pure`/`reads`/`writes`) are trusted only when the user set them with `effect/set`, and
-unclassified functions are not evaluated. `writes` are evaluated only with `--include-writes`.
+unclassified functions are not evaluated. `writes` are evaluated only with `--include-writes`. P1 is read as "side effects are
+separated with `effect/set`", not as a precondition on the language ([`document/evolving.md`](document/evolving.md) §1).
 
 ---
 
@@ -260,8 +284,13 @@ Scanning and evaluation are chosen by language. For a language the surface table
 modules given to `Repl.Evaluator` (`launch`/`eval_template`/`Eval.Scan`/`field_drip`) and how its REPL starts (`launch_opts/2`);
 `Project` (scanning) and `Runner` (evaluation) use them. There is one REPL per language (`iex` for Elixir), and the build tool only
 changes how it starts. Elixir, OCaml (the plain `ocaml` toplevel + `embody.ml`,
-[D-ocaml-adapter](document/verification/lib-repl-language-ocaml.exs.md#d-ocaml-adapter)) and Haskell (GHCi + `embody.hs`,
-[D-haskell-adapter](document/verification/lib-repl-language-haskell.exs.md#d-haskell-adapter)) are declared. embody is a separate
+[D-ocaml-adapter](document/verification/lib-repl-language-ocaml.exs.md#d-ocaml-adapter)), Haskell (GHCi + `embody.hs`,
+[D-haskell-adapter](document/verification/lib-repl-language-haskell.exs.md#d-haskell-adapter)), Python (`python -i` + `embody.py`,
+[D-python-adapter](document/verification/lib-repl-language-python.exs.md#d-python-adapter)), F# (`dotnet fsi` + `embody.fsx`,
+[D-fsharp-adapter](document/verification/lib-repl-language-fsharp.exs.md#d-fsharp-adapter)), C# (`dotnet fsi` + `embody.fsx` + `embody.cs`,
+[D-csharp-adapter](document/verification/lib-repl-language-csharp.exs.md#d-csharp-adapter)), Java (Scala's REPL + `embody.scala` + `embody.java`,
+[D-java-adapter](document/verification/lib-repl-language-java.exs.md#d-java-adapter)) and Scala 3 (Scala's REPL + `embody.scala`,
+[D-scala-adapter](document/verification/lib-repl-language-scala.exs.md#d-scala-adapter)) are declared. embody is a separate
 repository ([Crux-xurC/embody](https://github.com/Crux-xurC/embody)).
 
 Elixir's Scanner prefers elixir-ls (`Scanner.Lsp.Elixir`). It tries tezcatl's `/lsp` first for the language server, and starts
@@ -334,6 +363,13 @@ Totec decides what the line means (written as on the CLI, `XipeTotec.Input`), an
 `dialogue.text` (`Serve.Input`, [D-input-line](document/verification/lib-serve_input.exs.md#d-input-line)). `help` is one
 "`command: description`" a line; tezcatl's users yank it into the dictionary and use it for completion.
 
+## With an AI agent (MCP)
+
+`xipe mcp` is an MCP server over stdio: an MCP client (Claude Code …) starts it, and it passes ten tools to the running `xipe start`, so
+an agent scans, finds and reads functions, adds rows and evaluates them in the same Book the person sees. The agent only *proposes* a
+function's side-effect class, with a reason; a person approves it (`effect/approve`) before any of that function's rows are evaluated,
+and the agent cannot include writes or set expectations. Setting it up and why it is shaped so: [`document/mcp.md`](document/mcp.md).
+
 ---
 
 ## Documents
@@ -344,6 +380,8 @@ Totec decides what the line means (written as on the CLI, `XipeTotec.Input`), an
 | [`document/how-to-use.md`](document/how-to-use.md) | how to actually use it with the code as it is |
 | [`document/scope.md`](document/scope.md) | what is promised to work, what happens outside it, what a person does there, and the work not started |
 | [`document/internals.md`](document/internals.md) | for each use, what is called in what order, and which program does it |
+| [`document/evolving.md`](document/evolving.md) | where the languages beyond today's are going: stages, order, what each needs, what is set aside and why |
+| [`document/mcp.md`](document/mcp.md) | how an AI agent uses it through MCP, the concerns that shaped that, and what is not built yet |
 | [`document/extending.md`](document/extending.md) | for someone adding a language or a command (and their AI): what to start from and what behaviour to meet |
 | [`document/repl-adapter-guide.md`](document/repl-adapter-guide.md) | how to write an adapter for a new language or REPL (the detailed reference from when Elixir was written; the entrance is the extension guide) |
 | [`document/verification/`](document/verification/README.md) | every decision in force (`decisions.md`), every file (`index.md`), and a record per file: what it does, why, the decisions homed in it, what was not chosen |

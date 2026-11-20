@@ -25,7 +25,7 @@ defmodule XipeTotec.Core do
 
   @spec put_node(Book.t(), String.t(), map()) :: Book.t()
   def put_node(book, id, row) do
-    defaults = %{status: "live", effect: "unknown", effect_source: nil}
+    defaults = %{status: "live", effect: "unknown", effect_source: nil, effect_hash: nil, effect_reason: nil}
     Book.put(book, :nodes, id, Map.merge(defaults, row))
   end
 
@@ -97,14 +97,19 @@ defmodule XipeTotec.Core do
   @doc """
   A node's display label: `"Module.name/anykey"` -- `"Calc.add/2"` for
   Elixir, whose scanner puts the arity in `anykey` -- or just
-  `"Module.name"` when the node has no `anykey`. A node whose arities a
+  `"Module.name"` when the node has no `anykey`; an `anykey` that is a
+  sequence of types follows the name as it is (`"calc.Calc.add(Int, Int)"`). A node whose arities a
   person declared (`arity/set`) shows them: `"M.scale/1..2"`, `"M.f/1,3"`.
   """
   @spec node_label(map()) :: String.t()
   def node_label(%{module: module, name: name} = node) do
     case {node[:anykey], node[:arities]} do
       {nil, _} -> "#{module}.#{name}"
+      # a sequence of types with the counts declared (C#'s optional parameters): `N.T.Opt(int, int)/1..2`
+      {"(" <> _ = key, [_, _ | _] = as} -> "#{module}.#{name}#{key}/#{arities_text(as)}"
       {_key, [_, _ | _] = as} -> "#{module}.#{name}/#{arities_text(as)}"
+      # a sequence of types (D-anykey-shape): `calc.Calc.curried(Int)(Int)`
+      {"(" <> _ = key, _} -> "#{module}.#{name}#{key}"
       {key, _} -> "#{module}.#{name}/#{key}"
     end
   end
@@ -121,14 +126,20 @@ defmodule XipeTotec.Core do
   @doc """
   The argument counts a node can be called with: what a person declared
   (`arity/set`, for a function with default arguments: `def f(x, k \\\\ 2)`
-  is `f/1` and `f/2`), else its integer anykey alone; `nil` when the node's
-  anykey is no argument count (another language's scanner).
+  is `f/1` and `f/2`; with an integer anykey or a shape of one parameter
+  list, as C#'s optional parameters), else the sum of its shape (the
+  counts of its parameter lists, D-anykey-shape), else its integer anykey alone; `nil`
+  when the node tells no argument count (another language's scanner).
   """
   @spec accepted_arities(map()) :: [non_neg_integer()] | nil
   def accepted_arities(node) do
-    case {node[:anykey], node[:arities]} do
-      {key, [_ | _] = as} when is_integer(key) -> as
-      {key, _} when is_integer(key) -> [key]
+    case {node[:anykey], node[:arities], node[:shape]} do
+      {key, [_ | _] = as, _} when is_integer(key) -> as
+      # one parameter list: the counts declared with arity/set (C#'s optional parameters)
+      {_, [_ | _] = as, [_]} -> as
+      # the shape: one count per parameter list, all of them given (D-anykey-shape)
+      {_, _, [_ | _] = shape} -> [Enum.sum(shape)]
+      {key, _, _} when is_integer(key) -> [key]
       _ -> nil
     end
   end
@@ -165,12 +176,78 @@ defmodule XipeTotec.Core do
 
   @valid_effects ["pure", "reads", "writes", "unknown"]
 
-  @doc "Explicit effect assignment -- the only way effect_source becomes \"user\" (effects are never inferred)."
+  @doc """
+  Explicit effect assignment -- with `approve/2`, the only way effect_source
+  becomes "user" (effects are never inferred). The approval holds for the
+  body it was given for: `effect_hash` is the node's `body_hash` now, and a
+  rescan finding another body takes the approval back
+  (`Scanner.put_defs/3`, D-effect-approval).
+  """
   @spec set_effect(Book.t(), String.t(), String.t()) :: Book.t()
   def set_effect(book, node_id, effect) when effect in @valid_effects do
     row = fetch!(book, :nodes, node_id)
-    Book.put(book, :nodes, node_id, Map.merge(row, %{effect: effect, effect_source: "user"}))
+
+    Book.put(
+      book,
+      :nodes,
+      node_id,
+      Map.merge(row, %{effect: effect, effect_source: "user", effect_hash: row[:body_hash], effect_reason: nil})
+    )
   end
+
+  @doc """
+  An agent's proposed class, with its one-line reason: `effect_source:
+  "agent"`, which `filter_by_effect/3` does not trust, so nothing is
+  evaluated until a person approves it (`approve/2`). Refused over a class a
+  person set for the body as it is (D-mcp-effects).
+  """
+  @spec propose_effect(Book.t(), String.t(), String.t(), String.t()) :: {:ok, Book.t()} | {:error, String.t()}
+  def propose_effect(book, node_id, effect, reason) when effect in ["pure", "reads", "writes"] do
+    row = fetch!(book, :nodes, node_id)
+
+    if row[:effect_source] == "user" do
+      {:error, "#{node_label(row)} is already classified by a person (#{row.effect})"}
+    else
+      {:ok,
+       Book.put(
+         book,
+         :nodes,
+         node_id,
+         Map.merge(row, %{effect: effect, effect_source: "agent", effect_hash: row[:body_hash], effect_reason: reason})
+       )}
+    end
+  end
+
+  @doc """
+  A person approves classes as they stand: an agent's proposals
+  (`effect_source: "agent"`) and approvals a changed body took back
+  (`"changed"`). All or none: an id that is unknown, already a person's, or
+  has nothing to approve refuses the whole call. Each approval holds for the
+  node's body now (`effect_hash`).
+  """
+  @spec approve(Book.t(), [String.t()]) :: {:ok, Book.t(), [map()]} | {:error, String.t()}
+  def approve(book, node_ids) do
+    problems =
+      for id <- node_ids, reason = approve_problem(Book.get(book, :nodes, id)), reason != nil, do: "#{id}: #{reason}"
+
+    if problems == [] do
+      book =
+        Enum.reduce(node_ids, book, fn id, book ->
+          row = Book.get(book, :nodes, id)
+          Book.put(book, :nodes, id, Map.merge(row, %{effect_source: "user", effect_hash: row[:body_hash]}))
+        end)
+
+      {:ok, book, for(id <- Enum.uniq(node_ids), do: Book.get(book, :nodes, id) |> Map.put(:id, id))}
+    else
+      {:error, Enum.join(problems, "; ")}
+    end
+  end
+
+  defp approve_problem(nil), do: "unknown node"
+  defp approve_problem(%{effect_source: "user"}), do: "already approved"
+  defp approve_problem(%{effect: "unknown"}), do: "no class to approve (effect/set it)"
+  defp approve_problem(%{effect_source: source}) when source in ["agent", "changed"], do: nil
+  defp approve_problem(_), do: "no class to approve (effect/set it)"
 
   defp fetch!(book, table, id) do
     Book.get(book, table, id) || raise "unknown #{table} id: #{id}"
@@ -319,6 +396,12 @@ defmodule XipeTotec.Core do
       is_nil(call) -> "unknown call id"
       call_id in cyclic_ids(reference_graph(book)) -> "circular ⟦⟧ reference"
       is_nil(node) -> "its node no longer exists (removed by a rescan?)"
+      node.effect_source == "agent" ->
+        "effect #{node.effect} only proposed by an agent (#{node[:effect_reason]}) -- a person approves it: `effect/approve ids=[#{call.node}]`"
+
+      node.effect_source == "changed" ->
+        "its body changed since its class (#{node.effect}) was approved -- look at it, then `effect/approve ids=[#{call.node}]` (or effect/set)"
+
       node.effect_source != "user" -> "effect not classified -- `effect/set id=#{call.node} effect=pure` (or reads) to evaluate"
       node.effect in ["pure", "reads"] -> nil
       include_writes -> nil
@@ -503,6 +586,11 @@ defmodule XipeTotec.Core do
       module: node.module,
       name: node.name,
       anykey: node.anykey,
+      # the argument count per parameter list, for an adapter that splits
+      # the args into lists (Scala's `f(a, b)(c)`); nil where none is known
+      shape: node[:shape],
+      # words the adapter reads to write the call (D-node-marks): C#'s "async"
+      marks: node[:marks] || [],
       args: args,
       inputs: Enum.uniq(inputs),
       basis: basis,

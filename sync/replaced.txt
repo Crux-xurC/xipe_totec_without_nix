@@ -3,3 +3,4 @@
 # sync/upstream/<path> and, when it changes, shows the difference -- carry it
 # into the replacement by hand. One path a line; text after the path is a note.
 test/run.sh               bin/test (mix test)
+.github/workflows/test.yml  .github/workflows/test.yml (CI without Nix: setup-beam, bin/test)

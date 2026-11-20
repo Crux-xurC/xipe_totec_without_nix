@@ -187,6 +187,12 @@ defmodule CoreTest do
                plan.entries
     end
 
+    test "an entry carries the node's marks for the adapter (D-node-marks); none is []", %{book: book} do
+      book = Core.put_node(book, "n2", Map.put(Book.get(book, :nodes, "n2"), :marks, ["async"]))
+      assert [%{call_id: "c2", marks: ["async"]}] = Core.plan_recalc(book, "pass1", call_ids: ["c2"]).entries
+      assert [%{call_id: "c1", marks: []}] = Core.plan_recalc(book, "pass1", call_ids: ["c1"]).entries
+    end
+
     test "a plan-internal reference becomes a placeholder with an :in_plan input, in dependency order", %{book: book} do
       plan = Core.plan_recalc(book, "pass1", call_ids: ["c1", "c2"])
       assert [e1, e2] = plan.entries
@@ -458,6 +464,18 @@ defmodule CoreTest do
     test "leaves the /anykey suffix off a node without one" do
       assert Core.node_label(%{module: "Hs.Main", name: "go", anykey: nil}) == "Hs.Main.go"
       assert Core.node_label(%{module: "M", name: "f", anykey: 2}) == "M.f/2"
+    end
+
+    test "a sequence of types follows the name (D-anykey-shape)" do
+      assert Core.node_label(%{module: "calc.Calc", name: "add", anykey: "(Int, Int)"}) == "calc.Calc.add(Int, Int)"
+    end
+
+    test "accepted_arities: declared arities, else the shape's sum, else an integer anykey" do
+      assert Core.accepted_arities(%{anykey: "(Int)(Int)", shape: [1, 1]}) == [2]
+      assert Core.accepted_arities(%{anykey: "()", shape: [0]}) == [0]
+      assert Core.accepted_arities(%{anykey: 2, shape: [2], arities: [1, 2]}) == [1, 2]
+      assert Core.accepted_arities(%{anykey: 2}) == [2]
+      assert Core.accepted_arities(%{anykey: "x"}) == nil
     end
 
     test "nil for an unknown call id" do

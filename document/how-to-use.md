@@ -12,7 +12,7 @@ examples were made for real against `test/fixtures/calc_sample/calc.exs` (ids ch
 
 ```
 git clone https://github.com/Crux-xurC/xipe_totec.git
-git clone https://github.com/Crux-xurC/embody.git    # next to it: OCaml and Haskell evaluation load it from ../embody
+git clone https://github.com/Crux-xurC/embody.git    # next to it: OCaml, Haskell and Python evaluation load it from ../embody
 cd xipe_totec
 nix develop
 ```
@@ -28,8 +28,8 @@ The shell holds:
 | cowboy, gun, erlexec | the WebSocket server, connecting to tezcatl's `/lsp`, starting REPLs |
 | elixir-ls | the language server scanning uses (started by Xipe Totec itself when tezcatl is not there) |
 
-The languages are only those registered in `info.json`: today Elixir (`.ex`/`.exs`), OCaml (`.ml`), Haskell (`.hs`). Evaluating OCaml or
-Haskell needs `ocaml` / `ghci` in the target's environment (a flake in `project_env.json` …, §4.3) or on PATH, and each language's `embody`
+The languages are only those registered in `info.json`: today Elixir (`.ex`/`.exs`), OCaml (`.ml`), Haskell (`.hs`), Python (`.py`). Evaluating OCaml,
+Haskell or Python needs `ocaml` / `ghci` / `python3` (or the project's `.venv`) in the target's environment (a flake in `project_env.json` …, §4.3) or on PATH, and each language's `embody`
 (a separate repository, [embody](https://github.com/Crux-xurC/embody), §9.1). Type `xipe refresh -l` only after adding a language to `lib/repl/language/` (§9).
 
 ---
@@ -117,6 +117,17 @@ $ xipe do effect/set id=01M3D3Z10ZNS03HPV3Q9GGJZHT effect=pure
 | `unknown` | not known (the default) | as `writes` |
 
 Evaluation does not run in a sandbox: evaluating a `writes` function really writes.
+
+**A class holds for the body it was given for.** When a rescan finds the function's body changed, its class is kept but marked
+`changed` (the `effect_source` column) and the function is not evaluated until you look at it and approve it again:
+
+```
+$ xipe do effect/approve 'ids=[<node>]'            # take the class as it stands (or effect/set it anew)
+```
+
+**Classes proposed by an agent** (`effect/propose id=<node> effect=pure reason="…"`, what an AI agent uses) are shown with
+`effect_source` `agent` and their reason (`effect_reason`), and evaluate nothing until you approve them — `effect/approve` takes many ids
+at once, all or none. Rows an agent made have `origin` `agent`.
 
 **A function with default arguments** (`def scale(x, k \\ 2)`) is one card, for its defined arity (`scale/2`). To make a `scale(3)` row, decide
 once how many arguments it can be called with (it is never decided automatically):
@@ -233,9 +244,11 @@ If any command of a list fails, the exit code is 1.
 | method | params | What it does |
 |---|---|---|
 | `scan/run` | none | the same as `xipe scan` |
-| `row/add` | `node` `args` | make a calc row; the result's `id` is the new row's |
+| `row/add` | `node` `args` [`origin`] | make a calc row; the result's `id` is the new row's (`origin`: `manual` by default, `agent`) |
 | `row/remove` | `id` | remove a calc row |
 | `effect/set` | `id` (node) `effect` | classify side effects |
+| `effect/propose` | `id` (node) `effect` `reason` | propose a class with a one-line reason (an agent's; evaluates nothing) (§2.4) |
+| `effect/approve` | `ids` (nodes) | approve proposed classes and ones a changed body took back, all or none (§2.4) |
 | `arity/set` | `id` (node) `arities` | decide the argument counts a function with default arguments accepts (§2.4) |
 | `row/set-result` | `id` `result` | write a result by hand, without evaluating (as a literal of the target language) |
 | `row/set-prev` | `id` `prev` | write the previous value (what the next evaluation compares with = the expected value) by hand, without evaluating; the next evaluation replaces it again |
@@ -250,7 +263,7 @@ If any command of a list fails, the exit code is 1.
 | `row/check` | `call_ids` (none: all) `on` (default `error`) | fail when a row is in an `on` state (§3.4) |
 | `row/update` | `id` `args` | change a row's arguments (checked as `row/add`) and evaluate **that row alone** |
 | `eval/run` | `call_ids` (none: all) `include_writes=true` | the same as `eval` (the name on the wire) |
-| `eval/status` | none | the passes being evaluated: language, elapsed time, the number of rows, the row being evaluated now and its phase (below). On the server, waiting passes too |
+| `eval/status` | none | the passes being evaluated: language, elapsed time, the number of rows, the row being evaluated now and its phase (below). On the server, waiting passes too, and a pass still starting (its environment, build and REPL: `running  pass … starting`) |
 | `eval/cancel` | `pass_id` (may be left out when one pass runs) | stop a running pass (below). On the server, also take a waiting pass out by `pass_id` |
 | `config/set` | `key` `value` | change one setting of the open project (§4.1; what `dialogue update` runs at its end), written to its `project.json` |
 | `roster` | none | the tables `search` can look up: name, the mark written in a turn (`-s`, `-e`), columns, the columns `dialogue rewrite` can rewrite |
@@ -750,6 +763,17 @@ When connecting with tezcatl (the example above, a row of Poca's box, the relay 
 (the URL of tezcatl's `/lsp` relay) and `--fs-root` (tezcatl's file root; `~/projects` above stands for yours). Scanning then shares tezcatl's language servers. Started by hand,
 pass them yourself or set the environment variables (§10). Without tezcatl it works the same, starting elixir-ls itself.
 
+### 6.4 An AI agent through MCP (`xipe mcp`)
+
+An MCP client starts `xipe mcp` (stdio) and it talks to the `xipe start` running now (`--port N`, else the session's). Registering it
+with the client and the tools: [`mcp.md`](mcp.md). What a person does:
+
+- Read the agent's proposals: `effect_source` `agent` and `effect_reason` in the eval table (`xipe search`, tezcatl's table) and in
+  `card/list`; read the function, then approve: `xipe do effect/approve 'ids=[<node>, <node>]'` (all or none). Until then its rows
+  are `not run`
+- Rows the agent made have `origin` `agent`; they are ordinary rows (evaluate, change or remove them as yours)
+- After the agent edits a function, its class waits for you again (`changed`, §2.4)
+
 ---
 
 ## 7. The flow in daily use (summary)
@@ -850,7 +874,177 @@ written per language and not converted yet) ([D-languages-per-pass](verification
   fetched while evaluating). `dist-newstyle/` / `.stack-work/` appear in the target
 - Not supported: running functions that return `IO`
 
+### 9.3 Python (2026-11-16)
+
+([D-python-adapter](verification/lib-repl-language-python.exs.md#d-python-adapter))
+
+- Evaluation uses `python -i` — the project's `.venv/bin/python` when it exists, else `python3` from the target's environment. It imports
+  `embody.py` (from embody, as above), whose import hook loads the project's files: only `def`, `class`, imports, constants with literal
+  values and aliases (`comp = compose`) run (`print(…)`, `if __name__ == "__main__":`, `X = f()` do not). Packages the project imports from elsewhere import as usual. Nothing
+  (`__pycache__`) is written into the target
+- A module is the file's path: `geo/shape.py` is `geo.shape`, `geo/__init__.py` is `geo`, and `src/` is left out for the src layout
+- A row's arguments are written in Python (`args=["'x'", "[1, 2]"]`). The call is `module.f((a), (b))`; a function with no arguments is `f()`
+- `repr`: a `repr()` that `ast.literal_eval` reads back equal is `exact` (numbers, strings, lists, tuples, dicts, sets …); otherwise a value
+  `pickle` round-trips is `binary` (class instances with `__eq__`, cyclic lists); otherwise `unsupported` (functions, generators, coroutines).
+  `type` is the class, with its module unless a builtin (`int`, `target.Point`). `compare`: floats within `1e-9`
+- Failures: an exception is `crash` with its type and message (`ValueError: bad`); an argument that does not parse is `crash SyntaxError: …`.
+  A timeout is `timeout` (SIGALRM). A loop inside C code is stopped by nothing but the deadline (`session_hung`)
+- Scanning (`Scanner.Python`) reads text: top-level `def` / `async def` (methods and nested functions left out). Calls from names of the same
+  module, `from … import` (aliased, relative), and `module.f` of imported project modules
+- Not supported: methods as rows, awaiting `async` functions
+
+### 9.4 F# (2026-11-20)
+
+([D-fsharp-adapter](verification/lib-repl-language-fsharp.exs.md#d-fsharp-adapter))
+
+- Evaluation uses F# Interactive (`dotnet fsi --quiet`) with `embody.fsx` (from embody, as above). Each `*.fsproj` is built by `dotnet
+  build` into a temp dir (nothing fetched: FSharp.Core comes with the SDK; other packages must already be in the NuGet cache) and
+  referenced. Each `.fsx` script is loaded with only its definitions: `let` functions, values that run nothing (literals, names,
+  lambdas), types, `open`, modules; `printfn …`, `do …`, `let x = f ()` do not run. A `.fs` file no project builds is on the map only.
+  `obj/` appears in the target
+- A module is F#'s own name (`Sample.Calc`, nested `Sample.Geo.Inner`); a script without a `module` line is its file's name (`tool.fsx` is
+  `Tool`). `anykey` is the curried arguments as written: `let add a b` 2, `let addPair (a, b)` 1, `let answer ()` 1
+- A row's arguments are written in F#, one per curried argument (`args=[2,3]`, `args=[()]`, `args=[{ Sample.Point.X = 1.0; Y = 2.0 }]`;
+  a tuple is one argument and contains `,`, which a one-line `xipe do` cannot write yet). The call is `M.f (a) (b)`
+- `repr`: F#'s literals read back equal are `exact`: numbers, strings, arrays, lists, options, tuples, `Dictionary`, enums, and F#'s
+  records (`{ Sample.Point.X = 2.0; Y = 3.0 }`) and unions (`Sample.Shape.Rect (2.0, 3.0)`) — a later row takes them as they are.
+  Otherwise `binary` (System.Text.Json, when the round trip is the same) or `unsupported` (functions: `type=int -> int`)
+- Failures: an exception is `crash System.Exception: boom: 1`; a call that does not compile is `crash the call did not compile: …` in F#'s
+  terms (no module — with the build's first error or the scripts that did not load —, private, a value, `takes 2 argument(s), got 3`,
+  the signature `add : int -> int -> int`); fsi's own message (in your locale's language) is in the REPL's output. A timeout is `timeout`,
+  and the rest of the pass runs in a new session (`session` `<pass>/2`)
+- Scanning (`Scanner.FSharp`) uses F#'s own parser inside `dotnet fsi` (it comes with the SDK; `dotnet` must be in the target's
+  environment to scan too). Nodes: module-level `let` functions, and types' `static member`s with arguments, each overload a node of its own, labelled with its
+  parameters' types (`Sample.Conv.Show(int)`, `Sample.Conv.Show(float, int)`; values, instance members, static properties, operators left
+  out). A static member's row takes its arguments one per parameter (`Show` with `1.25` and `1`); fsi picks the overload by their types. Links: names found as F#
+  looks them up (the module and the enclosing ones, then `open`s)
+- Not supported: values and point-free functions as rows (`let addTen = add 10`), instance members, scripts whose functions use a value
+  their top level computes
+
+### 9.5 JavaScript and TypeScript — the map only (2026-11-17)
+
+([D-map-only-language](verification/lib-repl-language.exs.md#d-map-only-language))
+
+- `.js` `.mjs` `.cjs` `.jsx` and `.ts` `.tsx` `.mts` `.cts` are scanned: cards, links, `search`, `graph/*`. They are **not evaluated**:
+  `row/add` refuses their functions ("… is a map-only language …"), and nothing of them runs
+- A module is the file's path without its extension (`lib/core/commands`); address a function as `module=lib/core/commands name=load`
+- Nodes: top-level `function`s and functions bound to `const` / `let` / `var`; a file wrapped in one function called at once
+  (`(function (root) { … })(this);`) is read one level in. `visibility` is `public` when exported (`export`, `module.exports`, or, in a
+  wrapped file, assigned to a property such as `App.loader = { load: load }`)
+- Links: names of the same file, relative imports (`import { f } from "./m"`, default and `* as ns`, `require("./m")`). Calls through a
+  global or a package are not links
+
+
+### 9.6 Scala 3 (2026-11-20)
+
+([D-scala-adapter](verification/lib-repl-language-scala.exs.md#d-scala-adapter))
+
+- Evaluation uses Scala 3's REPL with `embody.scala` (from embody, as above), at the project's own Scala version: sbt (1.4 or later,
+  `build.sbt`) or scala-cli (`project.scala`) gives the compiler and the class path, and builds the project as your IDE does
+  (`target/`, `.scala-build/` appear in it). **Nothing is fetched: build the project once yourself, online, before the first
+  evaluation** — `sbt compile` (sbt itself, the Scala version and the dependencies go into the coursier cache) or `scala-cli compile .`.
+  Otherwise the rows `crash` with `Error downloading <module>`.
+  **Close an sbt shell (or Metals' sbt connection) before evaluating**: while an sbt server runs on the build, sbt is not started and
+  the rows `crash` saying so. A project without a build tool (scripts alone) is evaluated in `scala` on `PATH`
+- Each `.sc` script is loaded with only its definitions: `def`s, values that run nothing (literals, names, collections of them,
+  lambdas), classes, objects, imports; `println(…)`, `val n = f()` do not run, and `//> using dep` is not followed. Its module is its
+  path without `.sc`: `module=scripts/tool name=sq` (a script at the root: `module=tool`). An `object`'s body in the project runs when
+  the object is first used
+- A node is a `def` of an `object` (`sample.Calc`, nested `sample.Geo.Inner`) or of a package (`sample` for a top-level `def`).
+  `anykey` is the parameters' types as written, lists kept apart: `add(a: Int, b: Int)` is `(Int, Int)`, `curried(a: Int)(b: Int)` is
+  `(Int)(Int)`, written out in one form whatever the spacing; overloads are separate cards, addressed by `anykey`
+  (`node/resolve module=sample.Calc name=overload anykey=(String)`). The card's label shows it (`sample.Calc.add(Int, Int)`). Extension
+  methods are not cards
+- A row's arguments are written in Scala, all parameter lists in order (`args=[2,3]` for `curried(2)(3)`; `row/add` checks the count per
+  list: `takes 2 (1 + 1, one count per parameter list)`); a case class as its constructor (`args=[sample.Point(1.0, 2.0)]`)
+- `repr`: Scala literals read back equal are `exact`: numbers (`1L`, `1.5f`), strings, `Option`, `Either`, tuples, `List`, `Vector`,
+  `Set`, `Map`, arrays, case classes (`sample.Point(2.0, 3.0)`), enums (`sample.Color.Red`) — a later row takes them as they are.
+  Otherwise `binary` (Java serialization, when it reads back equal) or `unsupported` (functions, `LazyList`). `type=` is the running
+  value's (`List[Int]`)
+- Failures: an exception is `crash java.lang.IllegalStateException: boom 1`; a call that does not compile is `crash the call did not
+  compile: …` in Scala's terms (no object — with the build's first error, an sbt server, projects left out, scripts that did not load —,
+  no such function, private, `takes 2 argument(s), got 1`, the signature); the compiler's own message is in the REPL's output. An
+  argument with an unclosed bracket, string or comment is not sent (`crash the call was not sent: an unclosed (`). A timeout is
+  `timeout`, and the rest of the pass runs in a new session (the build is not run again)
+- Scanning (`Scanner.Scala`) uses the project's own Scala compiler's parser, had from sbt or scala-cli without building; without a
+  build tool (or while an sbt server runs) the `scala` on `PATH`. `scan` says which (its `describe`), and reports a function defined
+  twice with the same key instead of merging it silently
+- Not supported: Scala 2, sbt before 1.4, mill (later), methods of classes and traits, values as rows, scripts whose functions use a
+  value their top level computes
+
 ---
+
+### 9.7 C# — in F# Interactive, through a seam (2026-11-20)
+
+([D-csharp-adapter](verification/lib-repl-language-csharp.exs.md#d-csharp-adapter))
+
+- Evaluation uses F#'s window: F# Interactive (`dotnet fsi --quiet`) with `embody.fsx` and C#'s seam `embody.cs` (both from embody, as
+  above; an `embody.cs` of another protocol stops the start at once, saying embody must be updated). Each `*.csproj` is built by `dotnet
+  build` into a temp dir (nothing fetched: packages must already be in the NuGet cache) and referenced; the seam is built beside it.
+  `obj/` appears in the target
+- Rows are C#'s `public static` methods of public, non-generic types. A node is labelled with its parameters' types, so overloads are
+  nodes of their own (`Sample.Calls.Over(int)`, `Sample.Calls.Over(string)`); `row/add` takes as many arguments as a caller writes
+  (`out` parameters not written, optional ones may be left out with `arity/set`, a `params` array is one argument)
+- A row's arguments are written **in F#**, not C#: `args=[2,3]`, `args=[[|1; 2|]]`, `args=[Sample.Geo.Point(1.0, 2.0)]` (a record by its
+  constructor, without `new`; an argument containing `,` cannot be written on one `xipe do` line yet). The call is
+  `Ns.Type.Method((a), (b))`. For an overload whose argument count another one shares, each argument is given its parameter's type
+  (`null` reaches the `string` overload); a method returning a `Task` is awaited (the value is the `T`, `()` for a plain `Task`)
+- `repr`: what F# writes as a literal is `exact` (numbers, strings, arrays, `List<T>` as `ResizeArray [1; 2]`, a value tuple as
+  `struct (4, "4")` …), and a public positional record as its constructor's call (`Sample.Geo.Point(2.0, 3.0)`) — a later row takes it as
+  it is, and `compare` goes property by property. Other records are `binary` or `unsupported`; an anonymous type is `unsupported`
+- Failures in C#'s terms: `crash the call did not compile: Sample.Counter.Step is an instance method: only public static methods are
+  called (int Step(int by))`, `… is internal`, `… takes 1 argument(s), got 3: static string Over(int x); static string Over(string s)`;
+  an exception is its own text (`System.InvalidOperationException: boom: 1`); fsi's own message is in the REPL's output
+- Scanning (`Scanner.CSharp`) reads the text and needs nothing installed. Links: calls of project methods by name, `Type.Name(…)` and
+  `Ns.Type.Name(…)`; a call on a variable is not a link
+- Not supported: instance methods, `internal` / `private` methods, methods of generic types, a method whose type parameter appears in no
+  parameter (`Make<T>()`, refused by `row/add` with the reason), arguments written in C#
+
+### 9.8 Java — in Scala's REPL, through a seam (2026-11-20)
+
+([D-java-adapter](verification/lib-repl-language-java.exs.md#d-java-adapter))
+
+- Evaluation uses Scala's window: Scala 3's REPL (the `scala` on `PATH`) with `embody.scala` and Java's seam `embody.java` (both from
+  embody, as above; an embody file of another protocol stops the start at once, saying embody must be updated). A maven project
+  (`pom.xml`) is compiled offline (`mvn -o`: maven's plugins and the dependencies must already be in its local repository — build it
+  once online), every module's classes and class path put on the REPL's; the seam is compiled beside it by `javac`. `target/` appears in
+  the target, as maven's own build does. A gradle build is not read yet
+- Rows are Java's `public static` methods of public types (nested `static` classes and interfaces' static methods too). A node is
+  labelled with its parameters' types (`sample.Calc.over(int)`, `sample.Calc.over(String)`, `sample.Calc.sum(int...)`)
+- A row's arguments are written **in Scala**, not Java: `args=[2,3]`, `args=[sample.Point(1.0, 2.0)]` (a record by its constructor,
+  without `new`), a varargs parameter as one array (`args=[Array(5)]`; an argument containing `,` cannot be written on one `xipe do` line
+  yet). For an overload whose argument count another one shares, each argument is given its parameter's type (`null` reaches the
+  `String` overload); a method returning a `CompletableFuture` or a `Future` is awaited (the value is the `T`)
+- `repr`: what Scala writes as a literal is `exact` (numbers, strings, arrays, Java enums …), and so are a public record
+  (`sample.Point(2.0, 3.0)`), `java.util` lists, sets, maps and `Optional`, written as their constructors
+  (`java.util.ArrayList[java.lang.Integer](java.util.List.of[java.lang.Integer](0, 1))`) — a later row takes them as they are, and
+  `compare` goes part by part. Other values are `binary` when `Serializable`, else `unsupported`
+- Failures in Java's terms: `crash the call did not compile: sample.Calc.step is an instance method: only public static methods are
+  called (int step(int))`, `… is package-private`, `… takes 1 argument(s), got 3: static String over(double); …`; an exception, checked
+  or not, is its own text (`java.io.IOException: io: 1`); a failed build is named (`the build failed: …Broken.java:[1,46] …`)
+- Scanning (`Scanner.Java`) uses the JDK's own parser (`java` must be in the target's environment). Links: calls of project methods by
+  name, `Type.name(…)` and `pkg.Type.name(…)`, through imports and static imports; a call on a variable is not a link
+- Not supported: instance methods, non-public methods, a method whose type parameter appears in no parameter (`<T> T make()`, refused
+  by `row/add` with the reason), arguments written in Java, gradle
+
+### 9.9 Go and PHP — the map only (2026-11-20)
+
+([D-map-only-language](verification/lib-repl-language.exs.md#d-map-only-language))
+
+- `.go` and `.php` files are scanned: cards, links, `search`, `graph/*`. They are **not evaluated**: `row/add` refuses their functions
+  ("… is a map-only language …"), and nothing of them runs. Evaluating them (a driver) is left to the users (`evolving.md` §8)
+- They are read by the languages' own parsers, so `go` (Go) or `php` (PHP) must be in the target's environment to scan; Go's reader runs
+  with `go run` from Xipe Totec's own directory (nothing of the project is compiled, nothing fetched), PHP's with `php` (the file is only
+  tokenised; a syntax error is reported as the file's `scan_failed`). `vendor/` is not read (and Go's `testdata/`)
+- Go: a module is the package's import path (`example.com/calc/geo`; the directory when there is no `go.mod`); functions are named as
+  they are (`Mid`), methods with their receiver's type (`Point.Scale`); address one as `module=example.com/calc/geo name=Point.Scale`.
+  `visibility` is `public` for an exported name. Links: calls of the same package, of an import (`calc.Half`, an alias `c.Add`), and of
+  the receiver's methods (`p.norm()`)
+- PHP: a module is a class's full name (`App\Geo\Shapes`) for its methods, or the namespace (`App\Util`; `\` for the global one) for its
+  functions. `visibility` is `public` unless the method is `private` / `protected`. Links: as PHP resolves a name (`use`, `use
+  function`, the namespace then the global one, `self::`, `static::`, `parent::`, `$this->`), compared without case
+- A name two files define (Go's `name_linux.go` / `name_windows.go`, PHP's guarded `if (!function_exists(…))` helpers) is one card, the
+  first file's; `scan/run`'s `link_failures` names both places
 
 ## 10. Environment variables
 
@@ -873,6 +1067,8 @@ written per language and not converted yet) ([D-languages-per-pass](verification
 | `no project selected` | type `xipe choice project <path>` first |
 | `<dir> is not a registered project` | to pass `<dir>`, register it first with `xipe choice project <dir>` |
 | `not run  effect not classified` | not classified with `effect/set`. §2.4 |
+| `not run  its body changed since its class … was approved` | the function was edited after you classified it: look at it, then `effect/approve 'ids=[<node>]'`. §2.4 |
+| `not run  effect … only proposed by an agent` | an agent's proposal: `effect/approve 'ids=[<node>]'` after reading its reason. §2.4 |
 | `not run  effect=writes -- pass --include-writes` | `xipe eval --include-writes` (in `xipe do`: `eval include_writes=true`) |
 | `eval call bash.id  not run  unknown call id` | `$0.id` not wrapped in quotes. §3.3 |
 | `crash ... undefined variable "hi"` (meant as a string) | the `"` was removed when the words were read. Wrap it with its quotes: `'args=["hi"]'` (in a terminal and in the window alike; §3.3, §6.2). `dialogue do row/add` passes it as typed (§5.2) |
