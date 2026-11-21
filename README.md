@@ -8,6 +8,8 @@ Haskell, Python, F#, C#, Scala, Java; JavaScript, TypeScript, Go and PHP scanned
 spreadsheet. What it is and how to use it: [README.xipe_totec.md](README.xipe_totec.md) (xipe_totec's short README; the whole is
 [README.full.md](README.full.md), whose links to `README.md` mean README.xipe_totec.md) and [document/](document/how-to-use.md).
 
+What it looks like: [Xipe Totec's README](https://github.com/Crux-xurC/xipe_totec#readme) has a screenshot and a 3.5-minute video of an AI agent trying a library's functions over MCP, with tezcatl as the window.
+
 This repository is generated from xipe_totec (Nix management) by [`sync/sync.sh`](sync/README.md): the same code, made a Mix project
 (`mix.exs`). Changes are made in xipe_totec (Nix management) and synced here; the xipe_totec commit this tree comes from is in
 [`sync/UPSTREAM`](sync/UPSTREAM) (its tree in `sync/UPSTREAM_TREE`; CI says when it is not upstream's `main`).

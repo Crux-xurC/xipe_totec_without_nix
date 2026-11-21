@@ -9,7 +9,8 @@
 # xipe_totec -> here: never edit an upstream file here, change xipe_totec and sync.
 #
 # What it does, from `git archive <rev>` of xipe_totec (only committed files):
-#   - drops flake.nix, flake.lock and nix/
+#   - drops flake.nix, flake.lock and nix/, and demo_data/ (the demo video and
+#     screenshots: the README links to them on GitHub, the tarball needs none)
 #   - does not take the files in sync/replaced.txt (replaced by this
 #     repository's own work); keeps upstream's version of each under
 #     sync/upstream/ and, when one changed, prints the difference -- carry it
@@ -49,7 +50,7 @@ trap 'rm -rf "$tmp"' EXIT
 git -C "$upstream" archive "$commit" | tar -x -C "$tmp"
 
 # --- drop what is Nix's; set aside what this repository replaces ----------------
-rm -rf "$tmp/flake.nix" "$tmp/flake.lock" "$tmp/nix"
+rm -rf "$tmp/flake.nix" "$tmp/flake.lock" "$tmp/nix" "$tmp/demo_data"
 replaced="$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$here/sync/replaced.txt" | awk '{print $1}')"
 mkdir -p "$tmp/.replaced"
 for p in $replaced; do
