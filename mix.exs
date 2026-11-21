@@ -10,7 +10,7 @@ defmodule XipeTotecWithoutNix.MixProject do
   def project do
     [
       app: :xipe_totec,
-      version: "0.1.0",
+      version: "0.2.2",
       elixir: "~> 1.18",
       # lib/**/*.ex; the plugins (lib/repl/language/, lib/repl/eval/scan/) stay
       # .exs and are loaded at run time, as upstream does
